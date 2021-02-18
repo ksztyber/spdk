@@ -31,6 +31,7 @@
  *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include "spdk/mmio.h"
 #include "spdk/nvme_spec.h"
 #include "spdk/log.h"
 #include "spdk/stdinc.h"
@@ -41,6 +42,10 @@ struct nvme_ctrlr {
 	struct spdk_pci_device			*pci_device;
 	/* Pointer to the MMIO register space */
 	volatile struct spdk_nvme_registers	*regs;
+	/* Stride in uint32_t units between doorbells */
+	uint32_t				doorbell_stride_u32;
+	/* Controller's memory page size */
+	uint32_t				page_size;
 	TAILQ_ENTRY(nvme_ctrlr)			tailq;
 };
 
@@ -74,6 +79,25 @@ find_ctrlr_by_addr(struct spdk_pci_addr *addr)
 	return NULL;
 }
 
+static volatile void *
+get_pcie_reg_addr(struct nvme_ctrlr *ctrlr, uint32_t offset)
+{
+	return (volatile void *)((uintptr_t)ctrlr->regs + offset);
+}
+
+static void
+get_pcie_reg_8(struct nvme_ctrlr *ctrlr, uint32_t offset, uint64_t *value)
+{
+	assert(offset <= sizeof(struct spdk_nvme_registers) - 8);
+	*value = spdk_mmio_read_8(get_pcie_reg_addr(ctrlr, offset));
+}
+
+static void
+nvme_ctrlr_get_cap(struct nvme_ctrlr *ctrlr, union spdk_nvme_cap_register *cap)
+{
+	get_pcie_reg_8(ctrlr, offsetof(struct spdk_nvme_registers, cap), &cap->raw);
+}
+
 static int
 nvme_ctrlr_allocate_bars(struct nvme_ctrlr *ctrlr)
 {
@@ -96,6 +120,7 @@ pcie_nvme_enum_cb(void *ctx, struct spdk_pci_device *pci_dev)
 {
 	struct nvme_ctrlr *ctrlr;
 	TAILQ_HEAD(, nvme_ctrlr) *ctrlrs = ctx;
+	union spdk_nvme_cap_register cap;
 	uint16_t cmd_reg;
 	char addr[64] = {};
 
@@ -125,6 +150,10 @@ pcie_nvme_enum_cb(void *ctx, struct spdk_pci_device *pci_dev)
 	spdk_pci_device_cfg_read16(pci_dev, &cmd_reg, 4);
 	cmd_reg |= 0x404;
 	spdk_pci_device_cfg_write16(pci_dev, cmd_reg, 4);
+
+	nvme_ctrlr_get_cap(ctrlr, &cap);
+	ctrlr->page_size = 1 << (12 + cap.bits.mpsmin);
+	ctrlr->doorbell_stride_u32 = 1 << cap.bits.dstrd;
 
 	TAILQ_INSERT_TAIL(ctrlrs, ctrlr, tailq);
 
