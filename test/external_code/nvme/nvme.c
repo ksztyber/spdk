@@ -96,6 +96,7 @@ pcie_nvme_enum_cb(void *ctx, struct spdk_pci_device *pci_dev)
 {
 	struct nvme_ctrlr *ctrlr;
 	TAILQ_HEAD(, nvme_ctrlr) *ctrlrs = ctx;
+	uint16_t cmd_reg;
 	char addr[64] = {};
 
 	spdk_pci_addr_fmt(addr, sizeof(addr), &pci_dev->addr);
@@ -119,6 +120,11 @@ pcie_nvme_enum_cb(void *ctx, struct spdk_pci_device *pci_dev)
 		free(ctrlr);
 		return -1;
 	}
+
+	/* Enable PCI busmaster and disable INTx */
+	spdk_pci_device_cfg_read16(pci_dev, &cmd_reg, 4);
+	cmd_reg |= 0x404;
+	spdk_pci_device_cfg_write16(pci_dev, cmd_reg, 4);
 
 	TAILQ_INSERT_TAIL(ctrlrs, ctrlr, tailq);
 
