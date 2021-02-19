@@ -71,6 +71,27 @@ struct nvme_qpair {
 	uint32_t			num_entries;
 };
 
+enum nvme_ctrlr_state {
+	/* Controller has not been initialized yet */
+	NVME_CTRLR_STATE_INIT,
+	/* Waiting for CSTS.RDY to transition from 0 to 1 so that CC.EN may be set to 0 */
+	NVME_CTRLR_STATE_DISABLE_WAIT_FOR_READY_1,
+	/* Waiting for CSTS.RDY to transition from 1 to 0 so that CC.EN may be set to 1 */
+	NVME_CTRLR_STATE_DISABLE_WAIT_FOR_READY_0,
+	/* Enable the controller by writing CC.EN to 1 */
+	NVME_CTRLR_STATE_ENABLE,
+	/* Waiting for CSTS.RDY to transition from 0 to 1 after enabling the controller */
+	NVME_CTRLR_STATE_ENABLE_WAIT_FOR_READY_1,
+	/* Identify Controller command will be sent to then controller */
+	NVME_CTRLR_STATE_IDENTIFY,
+	/* Waiting for Identify Controller command to be completed */
+	NVME_CTRLR_STATE_WAIT_FOR_IDENTIFY,
+	/* Controller initialization has completed and the controller is ready */
+	NVME_CTRLR_STATE_READY,
+	/*  Controller initialization error */
+	NVME_CTRLR_STATE_ERROR,
+};
+
 struct nvme_ctrlr {
 	/* Underlying PCI device */
 	struct spdk_pci_device			*pci_device;
@@ -82,6 +103,8 @@ struct nvme_ctrlr {
 	uint32_t				page_size;
 	/* Admin queue pair */
 	struct nvme_qpair			*admin_qpair;
+	/* State of the controller */
+	enum nvme_ctrlr_state			state;
 	TAILQ_ENTRY(nvme_ctrlr)			tailq;
 };
 
@@ -278,6 +301,15 @@ pcie_nvme_enum_cb(void *ctx, struct spdk_pci_device *pci_dev)
 	return 0;
 }
 
+static int
+nvme_ctrlr_process_init(struct nvme_ctrlr *ctrlr)
+{
+	/* Immediately mark the controller as ready for now */
+	ctrlr->state = NVME_CTRLR_STATE_READY;
+
+	return 0;
+}
+
 static void
 nvme_ctrlr_free(struct nvme_ctrlr *ctrlr)
 {
@@ -292,7 +324,7 @@ probe_internal(struct spdk_pci_addr *addr, nvme_attach_cb attach_cb, void *cb_ct
 {
 	struct nvme_ctrlr *ctrlr, *tmp;
 	TAILQ_HEAD(, nvme_ctrlr) ctrlrs = TAILQ_HEAD_INITIALIZER(ctrlrs);
-	int rc;
+	int rc, init_complete;
 
 	if (addr == NULL) {
 		rc = spdk_pci_enumerate(spdk_pci_get_driver("nvme_external"),
@@ -312,6 +344,23 @@ probe_internal(struct spdk_pci_addr *addr, nvme_attach_cb attach_cb, void *cb_ct
 
 		return rc;
 	}
+
+	do {
+		init_complete = 1;
+		TAILQ_FOREACH_SAFE(ctrlr, &ctrlrs, tailq, tmp) {
+			rc = nvme_ctrlr_process_init(ctrlr);
+			if (rc != 0) {
+				SPDK_ERRLOG("NVMe controller initialization failed\n");
+				TAILQ_REMOVE(&ctrlrs, ctrlr, tailq);
+				nvme_ctrlr_free(ctrlr);
+				continue;
+			}
+
+			if (ctrlr->state != NVME_CTRLR_STATE_READY) {
+				init_complete = 0;
+			}
+		}
+	} while (!init_complete);
 
 	TAILQ_FOREACH_SAFE(ctrlr, &ctrlrs, tailq, tmp) {
 		TAILQ_REMOVE(&ctrlrs, ctrlr, tailq);
