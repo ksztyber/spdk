@@ -37,6 +37,29 @@
 #include "spdk/stdinc.h"
 #include "nvme.h"
 
+struct nvme_qpair {
+	/* Submission queue */
+	struct spdk_nvme_cmd	*cmd;
+	/* Completion queue */
+	struct spdk_nvme_cpl	*cpl;
+	/* Physical address of the submission queue */
+	uint64_t		sq_paddr;
+	/* Physical address of the completion queue */
+	uint64_t		cq_paddr;
+	/* Submission queue tail doorbell */
+	volatile uint32_t	*sq_tdbl;
+	/* Completion queue head doorbell */
+	volatile uint32_t	*cq_hdbl;
+	/* Submission/completion queues pointers */
+	uint16_t		sq_head;
+	uint16_t		sq_tail;
+	uint16_t		cq_head;
+	/* Current phase tag value */
+	uint8_t			phase;
+	/* Size of both queues */
+	uint32_t		num_entries;
+};
+
 struct nvme_ctrlr {
 	/* Underlying PCI device */
 	struct spdk_pci_device			*pci_device;
@@ -46,6 +69,8 @@ struct nvme_ctrlr {
 	uint32_t				doorbell_stride_u32;
 	/* Controller's memory page size */
 	uint32_t				page_size;
+	/* Admin queue pair */
+	struct nvme_qpair			*admin_qpair;
 	TAILQ_ENTRY(nvme_ctrlr)			tailq;
 };
 
@@ -115,6 +140,65 @@ nvme_ctrlr_allocate_bars(struct nvme_ctrlr *ctrlr)
 	return 0;
 }
 
+static void
+free_qpair(struct nvme_qpair *qpair)
+{
+	spdk_free(qpair->cmd);
+	spdk_free(qpair->cpl);
+	free(qpair);
+}
+
+static struct nvme_qpair *
+init_qpair(struct nvme_ctrlr *ctrlr, uint16_t id, uint32_t num_entries)
+{
+	struct nvme_qpair *qpair;
+	size_t page_align = sysconf(_SC_PAGESIZE);
+	size_t queue_align, queue_len;
+	volatile uint32_t *doorbell_base;
+
+	qpair = calloc(1, sizeof(*qpair));
+	if (!qpair) {
+		SPDK_ERRLOG("Failed to allocate queue pair\n");
+		return NULL;
+	}
+
+	qpair->phase = 1;
+	qpair->num_entries = num_entries;
+	queue_len = num_entries * sizeof(struct spdk_nvme_cmd);
+	queue_align = spdk_max(spdk_align32pow2(queue_len), page_align);
+	qpair->cmd = spdk_zmalloc(queue_len, queue_align, NULL,
+				  SPDK_ENV_SOCKET_ID_ANY, SPDK_MALLOC_DMA);
+	if (!qpair->cmd) {
+		SPDK_ERRLOG("Failed to allocate submission queue buffer\n");
+		free_qpair(qpair);
+		return NULL;
+	}
+
+	queue_len = num_entries * sizeof(struct spdk_nvme_cpl);
+	queue_align = spdk_max(spdk_align32pow2(queue_len), page_align);
+	qpair->cpl = spdk_zmalloc(queue_len, queue_align, NULL,
+				  SPDK_ENV_SOCKET_ID_ANY, SPDK_MALLOC_DMA);
+	if (!qpair->cpl) {
+		SPDK_ERRLOG("Failed to allocate completion queue buffer\n");
+		free_qpair(qpair);
+		return NULL;
+	}
+
+	qpair->sq_paddr = spdk_vtophys(qpair->cmd, NULL);
+	qpair->cq_paddr = spdk_vtophys(qpair->cpl, NULL);
+	if (qpair->sq_paddr == SPDK_VTOPHYS_ERROR || qpair->cq_paddr == SPDK_VTOPHYS_ERROR) {
+		SPDK_ERRLOG("Failed to translate the sq/cq virtual address\n");
+		free_qpair(qpair);
+		return NULL;
+	}
+
+	doorbell_base = (volatile uint32_t *)&ctrlr->regs->doorbell[0];
+	qpair->sq_tdbl = doorbell_base + (2 * id + 0) * ctrlr->doorbell_stride_u32;
+	qpair->cq_hdbl = doorbell_base + (2 * id + 1) * ctrlr->doorbell_stride_u32;
+
+	return qpair;
+}
+
 static int
 pcie_nvme_enum_cb(void *ctx, struct spdk_pci_device *pci_dev)
 {
@@ -155,6 +239,14 @@ pcie_nvme_enum_cb(void *ctx, struct spdk_pci_device *pci_dev)
 	ctrlr->page_size = 1 << (12 + cap.bits.mpsmin);
 	ctrlr->doorbell_stride_u32 = 1 << cap.bits.dstrd;
 
+	ctrlr->admin_qpair = init_qpair(ctrlr, 0, 2);
+	if (!ctrlr->admin_qpair) {
+		SPDK_ERRLOG("Failed to initialize admin queue pair for controller: %s\n", addr);
+		spdk_pci_device_unclaim(pci_dev);
+		free(ctrlr);
+		return -1;
+	}
+
 	TAILQ_INSERT_TAIL(ctrlrs, ctrlr, tailq);
 
 	return 0;
@@ -165,6 +257,7 @@ nvme_ctrlr_free(struct nvme_ctrlr *ctrlr)
 {
 	spdk_pci_device_unclaim(ctrlr->pci_device);
 	spdk_pci_device_detach(ctrlr->pci_device);
+	free_qpair(ctrlr->admin_qpair);
 	free(ctrlr);
 }
 
