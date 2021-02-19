@@ -159,6 +159,13 @@ get_pcie_reg_4(struct nvme_ctrlr *ctrlr, uint32_t offset, uint32_t *value)
 }
 
 static void
+set_pcie_reg_4(struct nvme_ctrlr *ctrlr, uint32_t offset, uint32_t value)
+{
+	assert(offset <= sizeof(struct spdk_nvme_registers) - 4);
+	spdk_mmio_write_4(get_pcie_reg_addr(ctrlr, offset), value);
+}
+
+static void
 nvme_ctrlr_get_cap(struct nvme_ctrlr *ctrlr, union spdk_nvme_cap_register *cap)
 {
 	get_pcie_reg_8(ctrlr, offsetof(struct spdk_nvme_registers, cap), &cap->raw);
@@ -174,6 +181,12 @@ static void
 nvme_ctrlr_get_csts(struct nvme_ctrlr *ctrlr, union spdk_nvme_csts_register *csts)
 {
 	get_pcie_reg_4(ctrlr, offsetof(struct spdk_nvme_registers, csts), &csts->raw);
+}
+
+static void
+nvme_ctrlr_set_cc(struct nvme_ctrlr *ctrlr, const union spdk_nvme_cc_register *cc)
+{
+	set_pcie_reg_4(ctrlr, offsetof(struct spdk_nvme_registers, cc.raw), cc->raw);
 }
 
 static int
@@ -326,11 +339,51 @@ nvme_ctrlr_process_init(struct nvme_ctrlr *ctrlr)
 	union spdk_nvme_cc_register cc;
 	union spdk_nvme_csts_register csts;
 
+	if (ctrlr->state == NVME_CTRLR_STATE_READY) {
+		return 0;
+	}
+
 	nvme_ctrlr_get_cc(ctrlr, &cc);
 	nvme_ctrlr_get_csts(ctrlr, &csts);
 
-	/* Immediately mark the controller as ready for now */
-	ctrlr->state = NVME_CTRLR_STATE_READY;
+	switch (ctrlr->state) {
+	case NVME_CTRLR_STATE_INIT:
+		if (cc.bits.en) {
+			if (csts.bits.rdy == 0) {
+				ctrlr->state = NVME_CTRLR_STATE_DISABLE_WAIT_FOR_READY_1;
+				break;
+			}
+
+			cc.bits.en = 0;
+			nvme_ctrlr_set_cc(ctrlr, &cc);
+		}
+		ctrlr->state = NVME_CTRLR_STATE_DISABLE_WAIT_FOR_READY_0;
+		break;
+	case NVME_CTRLR_STATE_DISABLE_WAIT_FOR_READY_1:
+		if (csts.bits.rdy) {
+			cc.bits.en = 0;
+			nvme_ctrlr_set_cc(ctrlr, &cc);
+			ctrlr->state = NVME_CTRLR_STATE_DISABLE_WAIT_FOR_READY_0;
+		}
+		break;
+	case NVME_CTRLR_STATE_DISABLE_WAIT_FOR_READY_0:
+		if (csts.bits.rdy == 0) {
+			ctrlr->state = NVME_CTRLR_STATE_ENABLE;
+		}
+		break;
+	case NVME_CTRLR_STATE_ENABLE:
+		cc.bits.en = 1;
+		nvme_ctrlr_set_cc(ctrlr, &cc);
+		ctrlr->state = NVME_CTRLR_STATE_ENABLE_WAIT_FOR_READY_1;
+		break;
+	case NVME_CTRLR_STATE_ENABLE_WAIT_FOR_READY_1:
+		if (csts.bits.rdy) {
+			ctrlr->state = NVME_CTRLR_STATE_READY;
+		}
+		break;
+	default:
+		assert(0 && "should never get here");
+	}
 
 	return 0;
 }
