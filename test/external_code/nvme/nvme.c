@@ -152,9 +152,28 @@ get_pcie_reg_8(struct nvme_ctrlr *ctrlr, uint32_t offset, uint64_t *value)
 }
 
 static void
+get_pcie_reg_4(struct nvme_ctrlr *ctrlr, uint32_t offset, uint32_t *value)
+{
+	assert(offset <= sizeof(struct spdk_nvme_registers) - 4);
+	*value = spdk_mmio_read_4(get_pcie_reg_addr(ctrlr, offset));
+}
+
+static void
 nvme_ctrlr_get_cap(struct nvme_ctrlr *ctrlr, union spdk_nvme_cap_register *cap)
 {
 	get_pcie_reg_8(ctrlr, offsetof(struct spdk_nvme_registers, cap), &cap->raw);
+}
+
+static void
+nvme_ctrlr_get_cc(struct nvme_ctrlr *ctrlr, union spdk_nvme_cc_register *cc)
+{
+	get_pcie_reg_4(ctrlr, offsetof(struct spdk_nvme_registers, cc), &cc->raw);
+}
+
+static void
+nvme_ctrlr_get_csts(struct nvme_ctrlr *ctrlr, union spdk_nvme_csts_register *csts)
+{
+	get_pcie_reg_4(ctrlr, offsetof(struct spdk_nvme_registers, csts), &csts->raw);
 }
 
 static int
@@ -304,6 +323,12 @@ pcie_nvme_enum_cb(void *ctx, struct spdk_pci_device *pci_dev)
 static int
 nvme_ctrlr_process_init(struct nvme_ctrlr *ctrlr)
 {
+	union spdk_nvme_cc_register cc;
+	union spdk_nvme_csts_register csts;
+
+	nvme_ctrlr_get_cc(ctrlr, &cc);
+	nvme_ctrlr_get_csts(ctrlr, &csts);
+
 	/* Immediately mark the controller as ready for now */
 	ctrlr->state = NVME_CTRLR_STATE_READY;
 
