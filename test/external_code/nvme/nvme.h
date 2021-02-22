@@ -35,6 +35,7 @@
 #define EXTERNAL_NVME_H
 
 #include "spdk/env.h"
+#include "spdk/nvme_spec.h"
 
 struct nvme_ctrlr;
 
