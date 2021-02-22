@@ -152,6 +152,13 @@ get_pcie_reg_8(struct nvme_ctrlr *ctrlr, uint32_t offset, uint64_t *value)
 }
 
 static void
+set_pcie_reg_8(struct nvme_ctrlr *ctrlr, uint32_t offset, uint64_t value)
+{
+	assert(offset <= sizeof(struct spdk_nvme_registers) - 8);
+	spdk_mmio_write_8(get_pcie_reg_addr(ctrlr, offset), value);
+}
+
+static void
 get_pcie_reg_4(struct nvme_ctrlr *ctrlr, uint32_t offset, uint32_t *value)
 {
 	assert(offset <= sizeof(struct spdk_nvme_registers) - 4);
@@ -187,6 +194,24 @@ static void
 nvme_ctrlr_set_cc(struct nvme_ctrlr *ctrlr, const union spdk_nvme_cc_register *cc)
 {
 	set_pcie_reg_4(ctrlr, offsetof(struct spdk_nvme_registers, cc.raw), cc->raw);
+}
+
+static void
+nvme_ctrlr_set_asq(struct nvme_ctrlr *ctrlr, uint64_t value)
+{
+	set_pcie_reg_8(ctrlr, offsetof(struct spdk_nvme_registers, asq), value);
+}
+
+static void
+nvme_ctrlr_set_acq(struct nvme_ctrlr *ctrlr, uint64_t value)
+{
+	set_pcie_reg_8(ctrlr, offsetof(struct spdk_nvme_registers, acq), value);
+}
+
+static void
+nvme_ctrlr_set_aqa(struct nvme_ctrlr *ctrlr, const union spdk_nvme_aqa_register *aqa)
+{
+	set_pcie_reg_4(ctrlr, offsetof(struct spdk_nvme_registers, aqa.raw), aqa->raw);
 }
 
 static int
@@ -338,6 +363,7 @@ nvme_ctrlr_process_init(struct nvme_ctrlr *ctrlr)
 {
 	union spdk_nvme_cc_register cc;
 	union spdk_nvme_csts_register csts;
+	union spdk_nvme_aqa_register aqa;
 
 	if (ctrlr->state == NVME_CTRLR_STATE_READY) {
 		return 0;
@@ -372,6 +398,14 @@ nvme_ctrlr_process_init(struct nvme_ctrlr *ctrlr)
 		}
 		break;
 	case NVME_CTRLR_STATE_ENABLE:
+		nvme_ctrlr_set_asq(ctrlr, ctrlr->admin_qpair->sq_paddr);
+		nvme_ctrlr_set_acq(ctrlr, ctrlr->admin_qpair->cq_paddr);
+
+		aqa.raw = 0;
+		aqa.bits.asqs = ctrlr->admin_qpair->num_entries - 1;
+		aqa.bits.acqs = ctrlr->admin_qpair->num_entries - 1;
+		nvme_ctrlr_set_aqa(ctrlr, &aqa);
+
 		cc.bits.en = 1;
 		nvme_ctrlr_set_cc(ctrlr, &cc);
 		ctrlr->state = NVME_CTRLR_STATE_ENABLE_WAIT_FOR_READY_1;
