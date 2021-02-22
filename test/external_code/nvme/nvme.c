@@ -37,27 +37,38 @@
 #include "spdk/stdinc.h"
 #include "nvme.h"
 
+struct nvme_request {
+	/* Command identifier and position within qpair's requests array */
+	uint16_t			cid;
+	/* NVMe command */
+	struct spdk_nvme_cmd		cmd;
+	TAILQ_ENTRY(nvme_request)	tailq;
+};
+
 struct nvme_qpair {
 	/* Submission queue */
-	struct spdk_nvme_cmd	*cmd;
+	struct spdk_nvme_cmd		*cmd;
 	/* Completion queue */
-	struct spdk_nvme_cpl	*cpl;
+	struct spdk_nvme_cpl		*cpl;
 	/* Physical address of the submission queue */
-	uint64_t		sq_paddr;
+	uint64_t			sq_paddr;
 	/* Physical address of the completion queue */
-	uint64_t		cq_paddr;
+	uint64_t			cq_paddr;
 	/* Submission queue tail doorbell */
-	volatile uint32_t	*sq_tdbl;
+	volatile uint32_t		*sq_tdbl;
 	/* Completion queue head doorbell */
-	volatile uint32_t	*cq_hdbl;
+	volatile uint32_t		*cq_hdbl;
 	/* Submission/completion queues pointers */
-	uint16_t		sq_head;
-	uint16_t		sq_tail;
-	uint16_t		cq_head;
+	uint16_t			sq_head;
+	uint16_t			sq_tail;
+	uint16_t			cq_head;
 	/* Current phase tag value */
-	uint8_t			phase;
+	uint8_t				phase;
+	/* NVMe requests queue */
+	TAILQ_HEAD(, nvme_request)	free_requests;
+	struct nvme_request		*requests;
 	/* Size of both queues */
-	uint32_t		num_entries;
+	uint32_t			num_entries;
 };
 
 struct nvme_ctrlr {
@@ -145,16 +156,18 @@ free_qpair(struct nvme_qpair *qpair)
 {
 	spdk_free(qpair->cmd);
 	spdk_free(qpair->cpl);
+	free(qpair->requests);
 	free(qpair);
 }
 
 static struct nvme_qpair *
-init_qpair(struct nvme_ctrlr *ctrlr, uint16_t id, uint32_t num_entries)
+init_qpair(struct nvme_ctrlr *ctrlr, uint16_t id, uint16_t num_entries)
 {
 	struct nvme_qpair *qpair;
 	size_t page_align = sysconf(_SC_PAGESIZE);
 	size_t queue_align, queue_len;
 	volatile uint32_t *doorbell_base;
+	uint16_t i;
 
 	qpair = calloc(1, sizeof(*qpair));
 	if (!qpair) {
@@ -182,6 +195,19 @@ init_qpair(struct nvme_ctrlr *ctrlr, uint16_t id, uint32_t num_entries)
 		SPDK_ERRLOG("Failed to allocate completion queue buffer\n");
 		free_qpair(qpair);
 		return NULL;
+	}
+
+	qpair->requests = calloc(num_entries - 1, sizeof(*qpair->requests));
+	if (!qpair->requests) {
+		SPDK_ERRLOG("Failed to allocate NVMe request descriptors\n");
+		free_qpair(qpair);
+		return NULL;
+	}
+
+	TAILQ_INIT(&qpair->free_requests);
+	for (i = 0; i < num_entries - 1; ++i) {
+		qpair->requests[i].cid = i;
+		TAILQ_INSERT_TAIL(&qpair->free_requests, &qpair->requests[i], tailq);
 	}
 
 	qpair->sq_paddr = spdk_vtophys(qpair->cmd, NULL);
