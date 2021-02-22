@@ -442,6 +442,46 @@ identify_ctrlr(struct nvme_ctrlr *ctrlr)
 	return 0;
 }
 
+int32_t process_admin_completions(struct nvme_ctrlr *ctrlr);
+
+int32_t
+process_admin_completions(struct nvme_ctrlr *ctrlr)
+{
+	struct spdk_nvme_cpl *cpl;
+	struct nvme_qpair *qpair = ctrlr->admin_qpair;
+	struct nvme_request *request;
+	int32_t max_completions, num_completions = 0;
+
+	max_completions = qpair->num_entries - 1;
+	while (1) {
+		cpl = &qpair->cpl[qpair->cq_head];
+
+		if (cpl->status.p != qpair->phase) {
+			break;
+		}
+
+		if (spdk_unlikely(++qpair->cq_head == qpair->num_entries)) {
+			qpair->cq_head = 0;
+			qpair->phase = !qpair->phase;
+		}
+
+		qpair->sq_head = cpl->sqhd;
+		request = &qpair->requests[cpl->cid];
+		request->cb_fn(request->cb_arg, cpl);
+		TAILQ_INSERT_TAIL(&qpair->free_requests, request, tailq);
+
+		if (++num_completions == max_completions) {
+			break;
+		}
+	}
+
+	if (num_completions > 0) {
+		spdk_mmio_write_4(qpair->cq_hdbl, qpair->cq_head);
+	}
+
+	return num_completions;
+}
+
 static int
 nvme_ctrlr_process_init(struct nvme_ctrlr *ctrlr)
 {
