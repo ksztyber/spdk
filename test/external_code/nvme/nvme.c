@@ -103,6 +103,8 @@ struct nvme_ctrlr {
 	uint32_t				page_size;
 	/* Admin queue pair */
 	struct nvme_qpair			*admin_qpair;
+	/* Controller's identify data */
+	struct spdk_nvme_ctrlr_data		*cdata;
 	/* State of the controller */
 	enum nvme_ctrlr_state			state;
 	TAILQ_ENTRY(nvme_ctrlr)			tailq;
@@ -345,10 +347,20 @@ pcie_nvme_enum_cb(void *ctx, struct spdk_pci_device *pci_dev)
 	ctrlr->page_size = 1 << (12 + cap.bits.mpsmin);
 	ctrlr->doorbell_stride_u32 = 1 << cap.bits.dstrd;
 
+	ctrlr->cdata = spdk_zmalloc(sizeof(*ctrlr->cdata), ctrlr->page_size, NULL,
+				    SPDK_ENV_SOCKET_ID_ANY, SPDK_MALLOC_DMA);
+	if (!ctrlr->cdata) {
+		SPDK_ERRLOG("Failed to allocate identify data for NVMe controller: %s\n", addr);
+		spdk_pci_device_unclaim(pci_dev);
+		free(ctrlr);
+		return -1;
+	}
+
 	ctrlr->admin_qpair = init_qpair(ctrlr, 0, 2);
 	if (!ctrlr->admin_qpair) {
 		SPDK_ERRLOG("Failed to initialize admin queue pair for controller: %s\n", addr);
 		spdk_pci_device_unclaim(pci_dev);
+		spdk_free(ctrlr->cdata);
 		free(ctrlr);
 		return -1;
 	}
@@ -428,6 +440,7 @@ nvme_ctrlr_free(struct nvme_ctrlr *ctrlr)
 	spdk_pci_device_unclaim(ctrlr->pci_device);
 	spdk_pci_device_detach(ctrlr->pci_device);
 	free_qpair(ctrlr->admin_qpair);
+	spdk_free(ctrlr->cdata);
 	free(ctrlr);
 }
 
@@ -510,6 +523,12 @@ nvme_detach(struct nvme_ctrlr *ctrlr)
 {
 	TAILQ_REMOVE(&g_nvme_ctrlrs, ctrlr, tailq);
 	nvme_ctrlr_free(ctrlr);
+}
+
+const struct spdk_nvme_ctrlr_data *
+nvme_ctrlr_get_data(struct nvme_ctrlr *ctrlr)
+{
+	return ctrlr->cdata;
 }
 
 SPDK_LOG_REGISTER_COMPONENT(nvme_external)
