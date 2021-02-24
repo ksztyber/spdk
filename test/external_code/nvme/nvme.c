@@ -406,9 +406,21 @@ submit_request(struct nvme_qpair *qpair, struct nvme_request *request)
 	spdk_mmio_write_4(qpair->sq_tdbl, qpair->sq_tail);
 }
 
-int identify_ctrlr(struct nvme_ctrlr *ctrlr);
+static void
+identify_ctrlr_done(void *ctx, const struct spdk_nvme_cpl *cpl)
+{
+	struct nvme_ctrlr *ctrlr = ctx;
 
-int
+	if (spdk_nvme_cpl_is_error(cpl)) {
+		SPDK_ERRLOG("Identify Controller command failed\n");
+		ctrlr->state = NVME_CTRLR_STATE_ERROR;
+		return;
+	}
+
+	ctrlr->state = NVME_CTRLR_STATE_READY;
+}
+
+static int
 identify_ctrlr(struct nvme_ctrlr *ctrlr)
 {
 	struct nvme_request *request;
@@ -425,8 +437,8 @@ identify_ctrlr(struct nvme_ctrlr *ctrlr)
 		return -EAGAIN;
 	}
 
-	request->cb_fn = NULL;
-	request->cb_arg = NULL;
+	request->cb_fn = identify_ctrlr_done;
+	request->cb_arg = ctrlr;
 
 	cmd = &request->cmd;
 	cmd->cid = request->cid;
@@ -442,9 +454,7 @@ identify_ctrlr(struct nvme_ctrlr *ctrlr)
 	return 0;
 }
 
-int32_t process_admin_completions(struct nvme_ctrlr *ctrlr);
-
-int32_t
+static int32_t
 process_admin_completions(struct nvme_ctrlr *ctrlr)
 {
 	struct spdk_nvme_cpl *cpl;
@@ -488,6 +498,7 @@ nvme_ctrlr_process_init(struct nvme_ctrlr *ctrlr)
 	union spdk_nvme_cc_register cc;
 	union spdk_nvme_csts_register csts;
 	union spdk_nvme_aqa_register aqa;
+	int rc = 0;
 
 	if (ctrlr->state == NVME_CTRLR_STATE_READY) {
 		return 0;
@@ -536,14 +547,24 @@ nvme_ctrlr_process_init(struct nvme_ctrlr *ctrlr)
 		break;
 	case NVME_CTRLR_STATE_ENABLE_WAIT_FOR_READY_1:
 		if (csts.bits.rdy) {
-			ctrlr->state = NVME_CTRLR_STATE_READY;
+			ctrlr->state = NVME_CTRLR_STATE_IDENTIFY;
 		}
+		break;
+	case NVME_CTRLR_STATE_IDENTIFY:
+		ctrlr->state = NVME_CTRLR_STATE_WAIT_FOR_IDENTIFY;
+		rc = identify_ctrlr(ctrlr);
+		break;
+	case NVME_CTRLR_STATE_WAIT_FOR_IDENTIFY:
+		process_admin_completions(ctrlr);
+		break;
+	case NVME_CTRLR_STATE_ERROR:
+		rc = -1;
 		break;
 	default:
 		assert(0 && "should never get here");
 	}
 
-	return 0;
+	return rc;
 }
 
 static void
