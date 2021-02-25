@@ -46,6 +46,10 @@ make -C $test_root clean
 run_test "external_make_tc4" make -C $test_root hello_world_no_bdev_shared_iso
 run_test "external_run_tc4" $test_root/hello_world/hello_bdev --json $test_root/hello_world/bdev.json -b Malloc0
 
+# Make the basic NVMe driver linked against individual shared SPDK libraries.
+run_test "external_make_tc5" make -C $test_root nvme_shared
+run_test "external_run_tc5" $test_root/nvme/identify.sh
+
 make -C $test_root clean
 
 make -C $SPDK_DIR clean
@@ -53,14 +57,18 @@ $SPDK_DIR/configure --without-shared --without-isal --without-ocf --disable-asan
 make -C $SPDK_DIR -j$(nproc)
 
 # Make both the application and bdev against individual SPDK archives.
-run_test "external_make_tc5" make -C $test_root hello_world_bdev_static
-run_test "external_run_tc5" $test_root/hello_world/hello_bdev --json $test_root/hello_world/bdev_external.json -b TestPT
+run_test "external_make_tc6" make -C $test_root hello_world_bdev_static
+run_test "external_run_tc6" $test_root/hello_world/hello_bdev --json $test_root/hello_world/bdev_external.json -b TestPT
 
 make -C $test_root clean
 
 # Make just the application linked against individual SPDK archives.
-run_test "external_make_tc6" make -C $test_root hello_world_no_bdev_static
-run_test "external_run_tc6" $test_root/hello_world/hello_bdev --json $test_root/hello_world/bdev.json -b Malloc0
+run_test "external_make_tc7" make -C $test_root hello_world_no_bdev_static
+run_test "external_run_tc7" $test_root/hello_world/hello_bdev --json $test_root/hello_world/bdev.json -b Malloc0
+
+# Make the basic NVMe driver statically linked against individual SPDK archives.
+run_test "external_make_tc8" make -C $test_root nvme_static
+run_test "external_run_tc8" $test_root/nvme/identify.sh
 
 make -C $test_root clean
 make -C $SPDK_DIR -j$(nproc) clean
