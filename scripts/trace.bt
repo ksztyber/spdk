@@ -1,0 +1,34 @@
+/* These match the first couple of fields of the corresponding data
+ * structures defined by the SPDK application. This is hacky for now just
+ * to show how it works.  We would want to provide something that users
+ * could incorporate into their scripts, that would stay up to date with
+ * the data structures defined in our C libraries. I haven't found a way
+ * to auto-generate that yet, but doesn't mean there isn't one.
+ */
+struct spdk_bdev_io {
+	void		*bdev;
+	uint8_t		type;
+};
+
+struct spdk_nvmf_request {
+	void		*qpair;
+	uint32_t	length;
+};
+
+/* This will collect a histogram of the lengths of every spdk_nvmf_request
+ * passed to the spdk_nvmf_request_exec() function.  Note that these
+ * probe points were created automatically, we did not need to do anything
+ * special to enable them.  'uprobe' at the beginning means one of these
+ * function entry points.
+ */
+uprobe:/home/ksztyber/src/spdk/build/bin/spdk_tgt:spdk_nvmf_request_exec {
+	@length = hist(((struct spdk_nvmf_request *)arg0)->length);
+}
+
+/* This will count how many spdk_bdev_io structures of each type are
+ * submitted. This probe point corresponds to the DTRACE_PROBE1 call
+ * added in lib/bdev/bdev.c.
+ */
+usdt:/home/ksztyber/src/spdk/build/bin/spdk_tgt:usdt_bdev_submit_io {
+	@[((struct spdk_bdev_io *)arg0)->type] = count();
+}

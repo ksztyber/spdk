@@ -51,6 +51,7 @@
 #include "spdk/string.h"
 
 #include "bdev_internal.h"
+#include <sys/sdt.h>
 
 #ifdef SPDK_CONFIG_VTUNE
 #include "ittnotify.h"
@@ -2290,6 +2291,11 @@ _bdev_io_submit(void *ctx)
 	tsc = spdk_get_ticks();
 	bdev_io->internal.submit_tsc = tsc;
 	spdk_trace_record_tsc(tsc, TRACE_BDEV_IO_START, 0, 0, (uintptr_t)bdev_io, bdev_io->type);
+#if 1
+	DTRACE_PROBE1(spdk_tgt, usdt_bdev_submit_io, bdev_io);
+#else
+	pthread_yield();
+#endif
 
 	if (spdk_likely(bdev_ch->flags == 0)) {
 		bdev_io_do_submit(bdev_ch, bdev_io);

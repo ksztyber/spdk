@@ -1,0 +1,43 @@
+1) Install bpftrace dependencies
+
+sudo apt-get install libbpfcc-dev libclang-7-dev
+
+2) Clone, build and install bpftrace
+
+Note: at least on Ubuntu, packages did not support userspace
+DTrace probes. There is a bpftrace GitHub issue that describes
+the issue in detail, with a fix from 2 years ago. The package
+versions on my Ubuntu systems (20.04) predated that fix.
+
+git clone https://github.com/iovisor/bpftrace.git
+mkdir bpftrace/build
+cd bpftrace/build
+cmake -DCMAKE_BUILD_TYPE=Release ..
+make -j8
+sudo make install
+
+3) Insert some Dtrace probes and run an nvme-tcp workload to exercise them
+
+cd spdk
+sudo su
+
+Start the SPDK target
+
+build/bin/spdk_tgt &
+tgt_pid=$!
+
+Configure the SPDK target with a null bdev and nvme-tcp subsystem
+
+scripts/rpc.py < scripts/ebpf.conf
+
+Inject our programs at the probe points specified in trace.bt
+
+bpftrace -p $tgt_pid scripts/trace.bt &
+
+Run some nvme-perf workloads (512B randread and 16KB randwrite)
+
+scripts/ebpf_perf.sh
+
+Kill the SPDK target.  This will also trigger bpftrace to display its data and exit.
+
+kill $tgt_pid
