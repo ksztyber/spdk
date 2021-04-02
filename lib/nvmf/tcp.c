@@ -206,6 +206,8 @@ struct spdk_nvmf_tcp_qpair {
 	struct spdk_nvmf_qpair			qpair;
 	struct spdk_nvmf_tcp_poll_group		*group;
 	struct spdk_sock			*sock;
+	struct spdk_sock			*ctrl_sock;
+	struct spdk_sock			*data_sock;
 
 	enum nvme_tcp_pdu_recv_state		recv_state;
 	enum nvme_tcp_qpair_state		state;
@@ -467,12 +469,19 @@ nvmf_tcp_dump_qpair_req_contents(struct spdk_nvmf_tcp_qpair *tqpair)
 static void
 nvmf_tcp_qpair_destroy(struct spdk_nvmf_tcp_qpair *tqpair)
 {
+	struct spdk_sock *sock = tqpair->sock;
 	int err = 0;
 
 	SPDK_DEBUGLOG(nvmf_tcp, "enter\n");
 
 	err = spdk_sock_close(&tqpair->sock);
 	assert(err == 0);
+	if (tqpair->ctrl_sock != sock) {
+		spdk_sock_close(&tqpair->ctrl_sock);
+	}
+	if (tqpair->data_sock != sock) {
+		spdk_sock_close(&tqpair->data_sock);
+	}
 	nvmf_tcp_cleanup_all_states(tqpair);
 
 	if (tqpair->state_cntr[TCP_REQUEST_STATE_FREE] != tqpair->resource_count) {
@@ -1039,10 +1048,12 @@ nvmf_tcp_handle_connect(struct spdk_nvmf_transport *transport,
 			struct spdk_sock *sock)
 {
 	struct spdk_nvmf_tcp_qpair *tqpair;
+	struct spdk_nvmf_tcp_transport *ttransport;
 	int rc;
 
 	SPDK_DEBUGLOG(nvmf_tcp, "New connection accepted on %s port %s\n",
 		      port->trid->traddr, port->trid->trsvcid);
+	ttransport = SPDK_CONTAINEROF(transport, struct spdk_nvmf_tcp_transport, transport);
 
 	tqpair = calloc(1, sizeof(struct spdk_nvmf_tcp_qpair));
 	if (tqpair == NULL) {
@@ -1064,6 +1075,21 @@ nvmf_tcp_handle_connect(struct spdk_nvmf_transport *transport,
 		SPDK_ERRLOG("spdk_sock_getaddr() failed of tqpair=%p\n", tqpair);
 		nvmf_tcp_qpair_destroy(tqpair);
 		return;
+	}
+
+	if (ttransport->redirect_sock != NULL) {
+		tqpair->ctrl_sock = spdk_sock_connect("127.0.0.1",
+						      SPDK_NVMF_TCP_REDIRECT_PORT, NULL);
+		tqpair->data_sock = spdk_sock_connect("127.0.0.1",
+						      SPDK_NVMF_TCP_REDIRECT_PORT, NULL);
+		if (tqpair->ctrl_sock == NULL || tqpair->data_sock == NULL) {
+			SPDK_ERRLOG("spdk_sock_connect() failed: %s\n", spdk_strerror(errno));
+			nvmf_tcp_qpair_destroy(tqpair);
+			return;
+		}
+	} else {
+		tqpair->ctrl_sock = tqpair->sock;
+		tqpair->data_sock = tqpair->sock;
 	}
 
 	spdk_nvmf_tgt_new_qpair(transport->tgt, &tqpair->qpair);
