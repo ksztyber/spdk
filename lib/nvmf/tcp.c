@@ -54,6 +54,7 @@
 #define SPDK_NVMF_TCP_DEFAULT_SOCK_PRIORITY 0
 #define SPDK_NVMF_TCP_DEFAULT_CONTROL_MSG_NUM 32
 #define SPDK_NVMF_TCP_DEFAULT_SUCCESS_OPTIMIZATION true
+#define SPDK_NVMF_TCP_REDIRECT_PORT 32767
 
 const struct spdk_nvmf_transport_ops spdk_nvmf_transport_tcp;
 
@@ -291,6 +292,7 @@ struct tcp_transport_opts {
 struct spdk_nvmf_tcp_transport {
 	struct spdk_nvmf_transport		transport;
 	struct tcp_transport_opts               tcp_opts;
+	struct spdk_sock			*redirect_sock;
 
 	pthread_mutex_t				lock;
 
@@ -512,6 +514,7 @@ nvmf_tcp_destroy(struct spdk_nvmf_transport *transport,
 	ttransport = SPDK_CONTAINEROF(transport, struct spdk_nvmf_tcp_transport, transport);
 
 	pthread_mutex_destroy(&ttransport->lock);
+	spdk_sock_close(&ttransport->redirect_sock);
 	free(ttransport);
 
 	if (cb_fn) {
@@ -603,6 +606,14 @@ nvmf_tcp_create(struct spdk_nvmf_transport_opts *opts)
 			    "per-poll group caches for each thread. (%" PRIu32 ")"
 			    "supplied. (%" PRIu32 ") required\n", opts->num_shared_buffers, min_shared_buffers);
 		SPDK_ERRLOG("Please specify a larger number of shared buffers\n");
+		free(ttransport);
+		return NULL;
+	}
+
+	ttransport->redirect_sock = spdk_sock_listen("127.0.0.1", SPDK_NVMF_TCP_REDIRECT_PORT, NULL);
+	if (!ttransport->redirect_sock) {
+		SPDK_ERRLOG("spdk_sock_listen(127.0.0.1, %d) failed: %s\n",
+			    SPDK_NVMF_TCP_REDIRECT_PORT, spdk_strerror(errno));
 		free(ttransport);
 		return NULL;
 	}
