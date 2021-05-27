@@ -385,6 +385,9 @@ spdk_nvme_ctrlr_connect_io_qpair(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme
 
 	nvme_robust_mutex_lock(&ctrlr->ctrlr_lock);
 	rc = nvme_transport_ctrlr_connect_qpair(ctrlr, qpair);
+	while (rc == -EAGAIN) {
+		rc = nvme_transport_ctrlr_connect_qpair_poll(ctrlr, qpair);
+	}
 	nvme_robust_mutex_unlock(&ctrlr->ctrlr_lock);
 
 	if (ctrlr->quirks & NVME_QUIRK_DELAY_AFTER_QUEUE_ALLOC) {
@@ -499,6 +502,9 @@ spdk_nvme_ctrlr_reconnect_io_qpair(struct spdk_nvme_qpair *qpair)
 	}
 
 	rc = nvme_transport_ctrlr_connect_qpair(ctrlr, qpair);
+	while (rc == -EAGAIN) {
+		rc = nvme_transport_ctrlr_connect_qpair_poll(ctrlr, qpair);
+	}
 	if (rc) {
 		rc = -EAGAIN;
 		goto out;
@@ -1151,6 +1157,8 @@ nvme_ctrlr_state_string(enum nvme_ctrlr_state state)
 		return "delay init";
 	case NVME_CTRLR_STATE_CONNECT_ADMINQ:
 		return "connect adminq";
+	case NVME_CTRLR_STATE_WAIT_FOR_CONNECT_ADMINQ:
+		return "wait for connect adminq";
 	case NVME_CTRLR_STATE_READ_VS:
 		return "read vs";
 	case NVME_CTRLR_STATE_READ_CAP:
@@ -3164,7 +3172,7 @@ nvme_ctrlr_process_init(struct spdk_nvme_ctrlr *ctrlr)
 	}
 	ctrlr->sleep_timeout_tsc = 0;
 
-	if (ctrlr->state > NVME_CTRLR_STATE_CONNECT_ADMINQ &&
+	if (ctrlr->state > NVME_CTRLR_STATE_WAIT_FOR_CONNECT_ADMINQ &&
 	    (nvme_ctrlr_get_cc(ctrlr, &cc) || nvme_ctrlr_get_csts(ctrlr, &csts))) {
 		if (!ctrlr->is_failed && ctrlr->state_timeout_tsc != NVME_TIMEOUT_INFINITE) {
 			/* While a device is resetting, it may be unable to service MMIO reads
@@ -3204,6 +3212,22 @@ nvme_ctrlr_process_init(struct spdk_nvme_ctrlr *ctrlr)
 		if (rc == 0) {
 			nvme_qpair_set_state(ctrlr->adminq, NVME_QPAIR_ENABLED);
 			nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_READ_VS, NVME_TIMEOUT_INFINITE);
+		} else if (rc == -EAGAIN) {
+			nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_WAIT_FOR_CONNECT_ADMINQ,
+					     NVME_TIMEOUT_INFINITE);
+			rc = 0;
+		} else {
+			nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_ERROR, NVME_TIMEOUT_INFINITE);
+		}
+		break;
+
+	case NVME_CTRLR_STATE_WAIT_FOR_CONNECT_ADMINQ:
+		rc = nvme_transport_ctrlr_connect_qpair_poll(ctrlr, ctrlr->adminq);
+		if (rc == 0) {
+			nvme_qpair_set_state(ctrlr->adminq, NVME_QPAIR_ENABLED);
+			nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_READ_VS, NVME_TIMEOUT_INFINITE);
+		} else if (rc == -EAGAIN) {
+			rc = 0;
 		} else {
 			nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_ERROR, NVME_TIMEOUT_INFINITE);
 		}

@@ -349,6 +349,26 @@ nvme_transport_ctrlr_delete_io_qpair(struct spdk_nvme_ctrlr *ctrlr, struct spdk_
 	}
 }
 
+static int
+ctrlr_connect_qpair_done(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_qpair *qpair, int rc)
+{
+	if (rc == 0) {
+		nvme_qpair_set_state(qpair, NVME_QPAIR_CONNECTED);
+		if (qpair->poll_group) {
+			rc = nvme_poll_group_connect_qpair(qpair);
+		}
+		if (rc == 0) {
+			return 0;
+		}
+	}
+
+	/* If the qpair was unable to reconnect, restore the original failure reason. */
+	qpair->transport_failure_reason = qpair->last_transport_failure_reason;
+	nvme_transport_ctrlr_disconnect_qpair(ctrlr, qpair);
+	nvme_qpair_set_state(qpair, NVME_QPAIR_DISCONNECTED);
+	return rc;
+}
+
 int
 nvme_transport_ctrlr_connect_qpair(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_qpair *qpair)
 {
@@ -365,26 +385,30 @@ nvme_transport_ctrlr_connect_qpair(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nv
 
 	nvme_qpair_set_state(qpair, NVME_QPAIR_CONNECTING);
 	rc = transport->ops.ctrlr_connect_qpair(ctrlr, qpair);
-	if (rc != 0) {
-		goto err;
+	if (rc == -EAGAIN) {
+		assert(transport->ops.ctrlr_connect_qpair_poll != NULL);
+		return -EAGAIN;
+	} else {
+		return ctrlr_connect_qpair_done(ctrlr, qpair, rc);
 	}
+}
 
-	nvme_qpair_set_state(qpair, NVME_QPAIR_CONNECTED);
-	if (qpair->poll_group) {
-		rc = nvme_poll_group_connect_qpair(qpair);
-		if (rc) {
-			goto err;
-		}
+int
+nvme_transport_ctrlr_connect_qpair_poll(struct spdk_nvme_ctrlr *ctrlr,
+					struct spdk_nvme_qpair *qpair)
+{
+	const struct spdk_nvme_transport *transport = nvme_get_transport(ctrlr->trid.trstring);
+	int rc;
+
+	assert(transport != NULL);
+	assert(transport->ops.ctrlr_connect_qpair_poll != NULL);
+
+	rc = transport->ops.ctrlr_connect_qpair_poll(ctrlr, qpair);
+	if (rc == -EAGAIN) {
+		return -EAGAIN;
+	} else {
+		return ctrlr_connect_qpair_done(ctrlr, qpair, rc);
 	}
-
-	return rc;
-
-err:
-	/* If the qpair was unable to reconnect, restore the original failure reason. */
-	qpair->transport_failure_reason = qpair->last_transport_failure_reason;
-	nvme_transport_ctrlr_disconnect_qpair(ctrlr, qpair);
-	nvme_qpair_set_state(qpair, NVME_QPAIR_DISCONNECTED);
-	return rc;
 }
 
 void

@@ -1624,6 +1624,14 @@ int nvme_transport_ctrlr_connect_qpair(struct spdk_nvme_ctrlr *ctrlr, struct spd
 	return g_connect_qpair_return_code;
 }
 
+int
+nvme_transport_ctrlr_connect_qpair_poll(struct spdk_nvme_ctrlr *ctrlr,
+					struct spdk_nvme_qpair *qpair)
+{
+	assert(false);
+	return -EINVAL;
+}
+
 static void
 test_spdk_nvme_ctrlr_reconnect_io_qpair(void)
 {
