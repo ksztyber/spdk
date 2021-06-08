@@ -110,6 +110,7 @@ struct nvme_tcp_qpair {
 
 	TAILQ_ENTRY(nvme_tcp_qpair)		link;
 	bool					needs_poll;
+	bool					connect_sent;
 
 	uint64_t				icreq_timeout_tsc;
 };
@@ -1954,12 +1955,20 @@ nvme_tcp_ctrlr_connect_qpair_poll(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvm
 	switch (tqpair->state) {
 	case NVME_TCP_QPAIR_STATE_INVALID:
 	case NVME_TCP_QPAIR_STATE_INITIALIZING:
+		tqpair->connect_sent = false;
 		rc = nvme_tcp_qpair_icreq_poll(tqpair);
 		break;
 	case NVME_TCP_QPAIR_STATE_RUNNING:
-		rc = nvme_fabric_qpair_connect(&tqpair->qpair, tqpair->num_entries);
-		if (rc < 0) {
-			SPDK_ERRLOG("Failed to send an NVMe-oF Fabric CONNECT command\n");
+		if (!tqpair->connect_sent) {
+			rc = nvme_fabric_qpair_connect_async(&tqpair->qpair, tqpair->num_entries);
+			if (rc < 0) {
+				SPDK_ERRLOG("Failed to send an NVMe-oF Fabric CONNECT command\n");
+				break;
+			}
+			tqpair->connect_sent = true;
+			return -EAGAIN;
+		} else {
+			return nvme_fabric_qpair_connect_poll(&tqpair->qpair);
 		}
 		break;
 	default:
