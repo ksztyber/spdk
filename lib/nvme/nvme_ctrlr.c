@@ -1029,6 +1029,12 @@ nvme_ctrlr_shutdown_poll_async(struct spdk_nvme_ctrlr *ctrlr,
 	return 0;
 }
 
+static inline uint64_t
+nvme_ctrlr_get_ready_timeout(struct spdk_nvme_ctrlr *ctrlr)
+{
+	return ctrlr->cap.bits.to * 500;
+}
+
 static int
 nvme_ctrlr_enable(struct spdk_nvme_ctrlr *ctrlr)
 {
@@ -3185,7 +3191,7 @@ nvme_ctrlr_process_init(struct spdk_nvme_ctrlr *ctrlr)
 		return -EIO;
 	}
 
-	ready_timeout_in_ms = 500 * ctrlr->cap.bits.to;
+	ready_timeout_in_ms = nvme_ctrlr_get_ready_timeout(ctrlr);
 
 	/*
 	 * Check if the current initialization step is done or has timed out.
