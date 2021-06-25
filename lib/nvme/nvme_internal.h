@@ -728,7 +728,8 @@ enum nvme_ctrlr_state {
 	NVME_CTRLR_STATE_ERROR
 };
 
-#define NVME_TIMEOUT_INFINITE	0
+#define NVME_TIMEOUT_INFINITE		0
+#define NVME_TIMEOUT_KEEP_EXISTING	UINT64_MAX
 
 /*
  * Used to track properties for all processes accessing the controller.
