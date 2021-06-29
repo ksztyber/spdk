@@ -406,8 +406,8 @@ spdk_nvme_ctrlr_connect_io_qpair(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme
 
 	nvme_robust_mutex_lock(&ctrlr->ctrlr_lock);
 	rc = nvme_transport_ctrlr_connect_qpair(ctrlr, qpair);
-	while (rc == -EAGAIN) {
-		rc = nvme_transport_ctrlr_connect_qpair_poll(ctrlr, qpair);
+	if (rc == -EAGAIN) {
+		rc = 0;
 	}
 	nvme_robust_mutex_unlock(&ctrlr->ctrlr_lock);
 
