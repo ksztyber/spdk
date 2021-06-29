@@ -567,6 +567,11 @@ enum nvme_ctrlr_state {
 	NVME_CTRLR_STATE_CHECK_EN,
 
 	/**
+	 * Waiting for CC to be read as part of EN check.
+	 */
+	NVME_CTRLR_STATE_CHECK_EN_WAIT_FOR_CC,
+
+	/**
 	 * Waiting for CSTS.RDY to transition from 0 to 1 so that CC.EN may be set to 0.
 	 */
 	NVME_CTRLR_STATE_DISABLE_WAIT_FOR_READY_1,
@@ -922,6 +927,8 @@ struct spdk_nvme_ctrlr {
 
 	/* PMR size in bytes */
 	uint64_t			pmr_size;
+
+	union spdk_nvme_cc_register		process_init_cc;
 };
 
 struct spdk_nvme_probe_ctx {
