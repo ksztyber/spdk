@@ -490,7 +490,16 @@ nvme_transport_ctrlr_connect_qpair_poll(struct spdk_nvme_ctrlr *ctrlr,
 	assert(transport != NULL);
 	assert(transport->ops.ctrlr_connect_qpair_poll != NULL);
 
+	/* Make sure we don't call connect_qpair_poll() recursively, which could happen if the
+	 * transport calls spdk_nvme_qpair_process_completions().
+	 */
+	if (qpair->in_connect_poll_context) {
+		return -EAGAIN;
+	}
+
+	qpair->in_connect_poll_context = 1;
 	rc = transport->ops.ctrlr_connect_qpair_poll(ctrlr, qpair);
+	qpair->in_connect_poll_context = 0;
 	if (rc == -EAGAIN) {
 		return -EAGAIN;
 	} else {
