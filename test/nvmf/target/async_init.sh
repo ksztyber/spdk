@@ -34,7 +34,8 @@ $rpc_py nvmf_subsystem_add_listener nqn.2016-06.io.spdk:cnode0 -t $TEST_TRANSPOR
 $rpc_py bdev_nvme_attach_controller -b $nvme_bdev -t $TEST_TRANSPORT -a $NVMF_FIRST_TARGET_IP \
 	-f ipv4 -s $NVMF_PORT -n nqn.2016-06.io.spdk:cnode0
 
-# TODO: Once the async detach path is functional, send a bdev_nvme_detach_controller here
+# Finally, detach the controller to verify that the detach path is also asynchronous
+$rpc_py bdev_nvme_detach_controller $nvme_bdev
 
 trap - SIGINT SIGTERM EXIT
 nvmftestfini

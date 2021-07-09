@@ -35,6 +35,12 @@
 #include "bdev_ocssd.h"
 #include "common.h"
 
+struct nvme_async_detach_ctx {
+	struct nvme_ctrlr		*ctrlr;
+	struct spdk_nvme_detach_ctx	*detach_ctx;
+	struct spdk_poller		*poller;
+};
+
 struct nvme_ctrlrs g_nvme_ctrlrs = TAILQ_HEAD_INITIALIZER(g_nvme_ctrlrs);
 pthread_mutex_t g_bdev_nvme_mutex = PTHREAD_MUTEX_INITIALIZER;
 bool g_bdev_nvme_module_finish;
@@ -116,8 +122,8 @@ nvme_bdev_dump_trid_json(const struct spdk_nvme_transport_id *trid, struct spdk_
 	}
 }
 
-void
-nvme_ctrlr_delete(struct nvme_ctrlr *nvme_ctrlr)
+static void
+_nvme_ctrlr_delete(struct nvme_ctrlr *nvme_ctrlr)
 {
 	struct nvme_ctrlr_trid *trid, *tmp_trid;
 	bool module_finish;
@@ -139,8 +145,6 @@ nvme_ctrlr_delete(struct nvme_ctrlr *nvme_ctrlr)
 	TAILQ_REMOVE(&g_nvme_ctrlrs, nvme_ctrlr, tailq);
 	module_finish = g_bdev_nvme_module_finish && TAILQ_EMPTY(&g_nvme_ctrlrs);
 	pthread_mutex_unlock(&g_bdev_nvme_mutex);
-	spdk_nvme_detach(nvme_ctrlr->ctrlr);
-	spdk_poller_unregister(&nvme_ctrlr->adminq_timer_poller);
 	free(nvme_ctrlr->name);
 	for (i = 0; i < nvme_ctrlr->num_ns; i++) {
 		free(nvme_ctrlr->namespaces[i]);
@@ -159,6 +163,63 @@ nvme_ctrlr_delete(struct nvme_ctrlr *nvme_ctrlr)
 	if (module_finish) {
 		spdk_io_device_unregister(&g_nvme_ctrlrs, NULL);
 		spdk_bdev_module_finish_done();
+	}
+}
+
+static int
+nvme_detach_poller(void *arg)
+{
+	struct nvme_async_detach_ctx *ctx = arg;
+	struct nvme_ctrlr *nvme_ctrlr = ctx->ctrlr;
+	int rc;
+
+	rc = spdk_nvme_detach_poll_async(ctx->detach_ctx);
+	if (rc != -EAGAIN) {
+		_nvme_ctrlr_delete(nvme_ctrlr);
+		spdk_poller_unregister(&ctx->poller);
+		free(ctx);
+	}
+
+	return SPDK_POLLER_BUSY;
+}
+
+void
+nvme_ctrlr_delete(struct nvme_ctrlr *nvme_ctrlr)
+{
+	struct nvme_async_detach_ctx *ctx;
+	int rc;
+
+	/* First, unregister the adminq poller, as the driver will poll adminq if necessary */
+	spdk_poller_unregister(&nvme_ctrlr->adminq_timer_poller);
+
+	ctx = calloc(1, sizeof(*ctx));
+	if (!ctx) {
+		SPDK_ERRLOG("Failed to allocate detach context\n");
+		goto error;
+	}
+
+	ctx->ctrlr = nvme_ctrlr;
+	ctx->poller = SPDK_POLLER_REGISTER(nvme_detach_poller, ctx, 1000);
+	if (!ctx->poller) {
+		SPDK_ERRLOG("Failed to register detach poller\n");
+		goto error;
+	}
+
+	rc = spdk_nvme_detach_async(nvme_ctrlr->ctrlr, &ctx->detach_ctx);
+	if (rc != 0) {
+		SPDK_ERRLOG("Failed to detach the NVMe controller\n");
+		goto error;
+	}
+
+	return;
+error:
+	/* We don't have a good way to handle errors here, so just do what we can and delete the
+	 * controller without detaching the underlying NVMe device.
+	 */
+	_nvme_ctrlr_delete(nvme_ctrlr);
+	if (ctx != NULL) {
+		spdk_poller_unregister(&ctx->poller);
+		free(ctx);
 	}
 }
 

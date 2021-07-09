@@ -62,6 +62,9 @@ DEFINE_STUB_V(spdk_bdev_module_finish_done, (void));
 DEFINE_STUB(spdk_nvme_transport_id_trtype_str, const char *, (enum spdk_nvme_transport_type trtype),
 	    NULL);
 DEFINE_STUB(spdk_nvme_transport_id_adrfam_str, const char *, (enum spdk_nvmf_adrfam adrfam), NULL);
+DEFINE_STUB(spdk_nvme_detach_async, int, (struct spdk_nvme_ctrlr *ctrlr,
+		struct spdk_nvme_detach_ctx **ctx), 0);
+DEFINE_STUB(spdk_nvme_detach_poll_async, int, (struct spdk_nvme_detach_ctx *ctx), 0);
 
 struct nvme_request {
 	spdk_nvme_cmd_cb cb_fn;
@@ -303,12 +306,6 @@ spdk_nvme_connect(const struct spdk_nvme_transport_id *trid,
 	return find_controller(trid);
 }
 
-int
-spdk_nvme_detach(struct spdk_nvme_ctrlr *ctrlr)
-{
-	return 0;
-}
-
 struct spdk_bdev *
 spdk_bdev_get_by_name(const char *bdev_name)
 {
@@ -542,6 +539,8 @@ delete_nvme_bdev_controller(struct nvme_ctrlr *nvme_ctrlr)
 
 	nvme_ctrlr_release(nvme_ctrlr);
 
+	poll_threads();
+	spdk_delay_us(1000);
 	poll_threads();
 
 	CU_ASSERT(TAILQ_EMPTY(&g_nvme_ctrlrs));
