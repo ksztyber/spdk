@@ -39,10 +39,11 @@
 #include "spdk_internal/mock.h"
 #include "thread/thread_internal.h"
 
+#include "common/lib/ut_multithread.c"
+#include "unit/lib/json_mock.c"
+
 #include "bdev/nvme/bdev_ocssd.c"
 #include "bdev/nvme/common.c"
-#include "common/lib/test_env.c"
-#include "unit/lib/json_mock.c"
 
 DEFINE_STUB_V(spdk_bdev_module_list_add, (struct spdk_bdev_module *bdev_module));
 DEFINE_STUB(spdk_nvme_ctrlr_is_ocssd_ns, bool, (struct spdk_nvme_ctrlr *ctrlr, uint32_t nsid),
@@ -91,7 +92,6 @@ struct spdk_nvme_ctrlr {
 
 static LIST_HEAD(, spdk_nvme_ctrlr) g_ctrlr_list = LIST_HEAD_INITIALIZER(g_ctrlr_list);
 static TAILQ_HEAD(, spdk_bdev) g_bdev_list = TAILQ_HEAD_INITIALIZER(g_bdev_list);
-static struct spdk_thread *g_thread;
 
 static struct spdk_nvme_ctrlr *
 find_controller(const struct spdk_nvme_transport_id *trid)
@@ -240,7 +240,7 @@ create_nvme_bdev_controller(const struct spdk_nvme_transport_id *trid, const cha
 		bdev_ocssd_populate_namespace(nvme_ctrlr, nvme_ctrlr->namespaces[nsid], NULL);
 	}
 
-	while (spdk_thread_poll(g_thread, 0, 0) > 0) {}
+	poll_threads();
 
 	spdk_io_device_register(nvme_ctrlr, io_channel_create_cb,
 				io_channel_destroy_cb, 0, name);
@@ -524,7 +524,7 @@ create_bdev(const char *ctrlr_name, const char *bdev_name, uint32_t nsid)
 
 	bdev_ocssd_create_bdev(ctrlr_name, bdev_name, nsid, create_bdev_cb, &status);
 
-	while (spdk_thread_poll(g_thread, 0, 0) > 0) {}
+	poll_threads();
 
 	return status;
 }
@@ -541,9 +541,8 @@ delete_nvme_bdev_controller(struct nvme_ctrlr *nvme_ctrlr)
 	}
 
 	nvme_ctrlr_release(nvme_ctrlr);
-	spdk_delay_us(1000);
 
-	while (spdk_thread_poll(g_thread, 0, 0) > 0) {}
+	poll_threads();
 
 	CU_ASSERT(TAILQ_EMPTY(&g_nvme_ctrlrs));
 }
@@ -1065,18 +1064,14 @@ main(int argc, const char **argv)
 	CU_ADD_TEST(suite, test_lba_translation);
 	CU_ADD_TEST(suite, test_get_zone_info);
 
-	g_thread = spdk_thread_create("test", NULL);
-	spdk_set_thread(g_thread);
+	allocate_threads(1);
+	set_thread(0);
 
 	CU_basic_set_mode(CU_BRM_VERBOSE);
 	CU_basic_run_tests();
 	num_failures = CU_get_number_of_failures();
 
-	spdk_thread_exit(g_thread);
-	while (!spdk_thread_is_exited(g_thread)) {
-		spdk_thread_poll(g_thread, 0, 0);
-	}
-	spdk_thread_destroy(g_thread);
+	free_threads();
 
 	CU_cleanup_registry();
 
