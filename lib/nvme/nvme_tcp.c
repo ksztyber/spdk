@@ -1948,6 +1948,7 @@ static int
 nvme_tcp_ctrlr_connect_qpair_poll(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_qpair *qpair)
 {
 	struct nvme_tcp_qpair *tqpair;
+	struct nvme_tcp_poll_group *tgroup;
 	int rc;
 
 	tqpair = nvme_tcp_qpair(qpair);
@@ -1957,6 +1958,15 @@ nvme_tcp_ctrlr_connect_qpair_poll(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvm
 	case NVME_TCP_QPAIR_STATE_INITIALIZING:
 		tqpair->connect_sent = false;
 		rc = nvme_tcp_qpair_icreq_poll(tqpair);
+		/* Make sure that the qpair gets polled if icresp was received during the
+		 * nvme_tcp_qpair_icreq_poll call, as there won't be anything else to kick it.
+		 */
+		if (tqpair->state == NVME_TCP_QPAIR_STATE_RUNNING &&
+		    qpair->poll_group != NULL && !tqpair->needs_poll) {
+			tgroup = nvme_tcp_poll_group(qpair->poll_group);
+			TAILQ_INSERT_TAIL(&tgroup->needs_poll, tqpair, link);
+			tqpair->needs_poll = true;
+		}
 		break;
 	case NVME_TCP_QPAIR_STATE_RUNNING:
 		if (!tqpair->connect_sent) {
