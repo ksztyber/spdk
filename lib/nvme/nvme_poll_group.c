@@ -36,7 +36,8 @@
 #include "nvme_internal.h"
 
 struct spdk_nvme_poll_group *
-spdk_nvme_poll_group_create(void *ctx, struct spdk_nvme_accel_fn_table *table)
+spdk_nvme_poll_group_create(void *ctx, struct spdk_nvme_accel_fn_table *table,
+			    spdk_nvme_connected_qpair_cb connected_qpair_cb)
 {
 	struct spdk_nvme_poll_group *group;
 
@@ -62,6 +63,7 @@ spdk_nvme_poll_group_create(void *ctx, struct spdk_nvme_accel_fn_table *table)
 	}
 
 	group->ctx = ctx;
+	group->connected_qpair_cb = connected_qpair_cb;
 	STAILQ_INIT(&group->tgroups);
 
 	return group;

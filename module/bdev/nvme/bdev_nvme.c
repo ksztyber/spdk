@@ -1103,6 +1103,13 @@ bdev_nvme_submit_accel_crc32c(void *ctx, uint32_t *dst, struct iovec *iov,
 	}
 }
 
+static void
+bdev_nvme_connected_qpair_cb(struct spdk_nvme_qpair *qpair, bool success, void *poll_group_ctx)
+{
+	SPDK_DEBUGLOG(bdev_nvme, "Connected qpair=%p, id=%u: %s", qpair,
+		      spdk_nvme_qpair_get_id(qpair), success ? "success" : "failure");
+}
+
 static struct spdk_nvme_accel_fn_table g_bdev_nvme_accel_fn_table = {
 	.table_size		= sizeof(struct spdk_nvme_accel_fn_table),
 	.submit_accel_crc32c	= bdev_nvme_submit_accel_crc32c,
@@ -1113,7 +1120,8 @@ bdev_nvme_create_poll_group_cb(void *io_device, void *ctx_buf)
 {
 	struct nvme_poll_group *group = ctx_buf;
 
-	group->group = spdk_nvme_poll_group_create(group, &g_bdev_nvme_accel_fn_table);
+	group->group = spdk_nvme_poll_group_create(group, &g_bdev_nvme_accel_fn_table,
+			bdev_nvme_connected_qpair_cb);
 	if (group->group == NULL) {
 		return -1;
 	}

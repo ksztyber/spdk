@@ -72,6 +72,7 @@ DEFINE_STUB(spdk_nvme_ctrlr_get_flags, uint64_t, (struct spdk_nvme_ctrlr *ctrlr)
 
 DEFINE_STUB(accel_engine_create_cb, int, (void *io_device, void *ctx_buf), 0);
 DEFINE_STUB_V(accel_engine_destroy_cb, (void *io_device, void *ctx_buf));
+DEFINE_STUB(spdk_nvme_qpair_get_id, uint16_t, (struct spdk_nvme_qpair *qpair), 0);
 
 struct spdk_io_channel *
 spdk_accel_engine_get_io_channel(void)
@@ -898,7 +899,8 @@ spdk_nvme_ns_cmd_write_zeroes(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *q
 }
 
 struct spdk_nvme_poll_group *
-spdk_nvme_poll_group_create(void *ctx, struct spdk_nvme_accel_fn_table *table)
+spdk_nvme_poll_group_create(void *ctx, struct spdk_nvme_accel_fn_table *table,
+			    spdk_nvme_connected_qpair_cb connected_cb)
 {
 	struct spdk_nvme_poll_group *group;
 

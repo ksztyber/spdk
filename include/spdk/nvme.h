@@ -2360,16 +2360,28 @@ typedef void (*spdk_nvme_disconnected_qpair_cb)(struct spdk_nvme_qpair *qpair,
 		void *poll_group_ctx);
 
 /**
+ * This function alerts the user when qpair connection is completed.
+ *
+ * \param qpair I/O queue pair.
+ * \param succes Indicates whether the connection was successful or not.
+ * \param poll_group_ctx User context supplied to spdk_nvme_poll_group_create.
+ */
+typedef void (*spdk_nvme_connected_qpair_cb)(struct spdk_nvme_qpair *qpair,
+		bool success, void *poll_group_ctx);
+
+/**
  * Create a new poll group.
  *
  * \param ctx A user supplied context that can be retrieved later with spdk_nvme_poll_group_get_ctx
  * \param table The call back table defined by users which contains the accelerated functions
  * which can be used to accelerate some operations such as crc32c.
+ * \param connected_qpair_cb Callback to notify about qpairs connection being completed.
  *
  * \return Pointer to the new poll group, or NULL on error.
  */
 struct spdk_nvme_poll_group *spdk_nvme_poll_group_create(void *ctx,
-		struct spdk_nvme_accel_fn_table *table);
+		struct spdk_nvme_accel_fn_table *table,
+		spdk_nvme_connected_qpair_cb connected_qpair_cb);
 
 /**
  * Get a optimal poll group.
