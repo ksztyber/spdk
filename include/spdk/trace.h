@@ -427,6 +427,44 @@ void spdk_trace_add_register_fn(struct spdk_trace_register_fn *reg_fn);
 	}							\
 	static void fn(void)
 
+
+/** Trace parser object used as a context for the parsing functions */
+struct spdk_trace_parser;
+
+enum spdk_trace_parser_mode {
+	/** Regular file */
+	SPDK_TRACE_PARSER_MODE_FILE,
+	/** Shared memory */
+	SPDK_TRACE_PARSER_MODE_SHM,
+};
+
+/** Describes trace file and options to use when parsing it */
+struct spdk_trace_parser_opts {
+	/** Either file name or shared memory name depending on mode */
+	const char	*filename;
+	/** Trace file type, either regular file or shared memory */
+	int		mode;
+	/** Logical core number to parse the traces from (or SPDK_TRACE_MAX_LCORE) for all cores */
+	int		lcore;
+};
+
+/**
+ * Initialize the parser using a specified trace file.  This results in parsing the traces, merging
+ * entries from multiple cores together and sorting them by their tsc, so it can take a significant
+ * amount of time to complete.
+ *
+ * \param opts Describes the trace file to parse.
+ * \return Parser object or NULL in case of any failures.
+ */
+struct spdk_trace_parser *spdk_trace_parser_init(const struct spdk_trace_parser_opts *opts);
+
+/**
+ * Free any resources tied to a parser object.
+ *
+ * \param parser Parser to clean up.
+ */
+void spdk_trace_parser_cleanup(struct spdk_trace_parser *parser);
+
 #ifdef __cplusplus
 }
 #endif
