@@ -473,6 +473,15 @@ void spdk_trace_parser_cleanup(struct spdk_trace_parser *parser);
  */
 void spdk_trace_parser_get_flags(struct spdk_trace_parser *parser, struct spdk_trace_flags **flags);
 
+/**
+ * Return the highest tsc out of first entries across all speicifed cores.  This value can be used
+ * to select entries from the subset of time we have the data from all reactors.
+ *
+ * \param parser Parser object to be used.
+ * \return Offset in tsc.
+ */
+uint64_t spdk_trace_parser_get_tsc_offset(struct spdk_trace_parser *parser);
+
 #ifdef __cplusplus
 }
 #endif

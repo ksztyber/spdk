@@ -249,4 +249,10 @@ extern "C" {
 		*flags = &parser->histories->flags;
 	}
 
+	uint64_t
+	spdk_trace_parser_get_tsc_offset(struct spdk_trace_parser *parser)
+	{
+		return parser->tsc_offset;
+	}
+
 } /* extern "C" */
