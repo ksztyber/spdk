@@ -65,7 +65,23 @@ struct spdk_trace_parser {
 	int				fd;
 	uint64_t			tsc_offset;
 	entry_map			entries;
+	entry_map::iterator		iter;
 };
+
+static bool
+next_entry(struct spdk_trace_parser *parser, struct spdk_trace_parser_entry *entry)
+{
+	if (parser->iter == parser->entries.end()) {
+		return false;
+	}
+
+	entry->entry = parser->iter->second;
+	entry->lcore = parser->iter->first.lcore;
+
+	parser->iter++;
+
+	return true;
+}
 
 static void
 populate_events(struct spdk_trace_parser *parser, struct spdk_trace_history *history,
@@ -204,6 +220,8 @@ init(const struct spdk_trace_parser_opts *opts)
 		}
 	}
 
+	parser->iter = parser->entries.begin();
+
 	return parser;
 error:
 	spdk_trace_parser_cleanup(parser);
@@ -253,6 +271,13 @@ extern "C" {
 	spdk_trace_parser_get_tsc_offset(struct spdk_trace_parser *parser)
 	{
 		return parser->tsc_offset;
+	}
+
+	bool
+	spdk_trace_parser_next_entry(struct spdk_trace_parser *parser,
+				     struct spdk_trace_parser_entry *entry)
+	{
+		return next_entry(parser, entry);
 	}
 
 } /* extern "C" */
