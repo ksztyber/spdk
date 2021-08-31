@@ -36,20 +36,102 @@
 #include "spdk/trace.h"
 #include "spdk/util.h"
 
+#include <map>
+
+struct entry_key {
+	entry_key(uint16_t _lcore, uint64_t _tsc) : lcore(_lcore), tsc(_tsc) {}
+	uint16_t lcore;
+	uint64_t tsc;
+};
+
+class compare_entry_key
+{
+public:
+	bool operator()(const entry_key &first, const entry_key &second) const
+	{
+		if (first.tsc == second.tsc) {
+			return first.lcore < second.lcore;
+		} else {
+			return first.tsc < second.tsc;
+		}
+	}
+};
+
+typedef std::map<entry_key, spdk_trace_entry *, compare_entry_key> entry_map;
+
 struct spdk_trace_parser {
 	struct spdk_trace_histories	*histories;
 	size_t				map_size;
 	int				fd;
+	uint64_t			tsc_offset;
+	entry_map			entries;
 };
+
+static void
+populate_events(struct spdk_trace_parser *parser, struct spdk_trace_history *history,
+		int num_entries)
+{
+	int i, num_entries_filled;
+	struct spdk_trace_entry *e;
+	int first, last, lcore;
+
+	lcore = history->lcore;
+	e = history->entries;
+
+	num_entries_filled = num_entries;
+	while (e[num_entries_filled - 1].tsc == 0) {
+		num_entries_filled--;
+	}
+
+	if (num_entries == num_entries_filled) {
+		first = last = 0;
+		for (i = 1; i < num_entries; i++) {
+			if (e[i].tsc < e[first].tsc) {
+				first = i;
+			}
+			if (e[i].tsc > e[last].tsc) {
+				last = i;
+			}
+		}
+	} else {
+		first = 0;
+		last = num_entries_filled - 1;
+	}
+
+	/*
+	 * We keep track of the highest first TSC out of all reactors.
+	 *  We will ignore any events that occured before this TSC on any
+	 *  other reactors.  This will ensure we only print data for the
+	 *  subset of time where we have data across all reactors.
+	 */
+	if (e[first].tsc > parser->tsc_offset) {
+		parser->tsc_offset = e[first].tsc;
+	}
+
+	i = first;
+	while (1) {
+		if (e[i].tpoint_id != SPDK_TRACE_MAX_TPOINT_ID) {
+			parser->entries[entry_key(lcore, e[i].tsc)] = &e[i];
+		}
+		if (i == last) {
+			break;
+		}
+		i++;
+		if (i == num_entries_filled) {
+			i = 0;
+		}
+	}
+}
 
 static struct spdk_trace_parser *
 init(const struct spdk_trace_parser_opts *opts)
 {
 	struct spdk_trace_parser *parser;
+	struct spdk_trace_history *history;
 	struct stat stat;
-	int rc;
+	int rc, i;
 
-	parser = (struct spdk_trace_parser *)calloc(1, sizeof(*parser));
+	parser = new spdk_trace_parser();
 	if (parser == NULL) {
 		return NULL;
 	}
@@ -106,6 +188,22 @@ init(const struct spdk_trace_parser_opts *opts)
 		goto error;
 	}
 
+	if (opts->lcore == SPDK_TRACE_MAX_LCORE) {
+		for (i = 0; i < SPDK_TRACE_MAX_LCORE; i++) {
+			history = spdk_get_per_lcore_history(parser->histories, i);
+			if (history->num_entries == 0 || history->entries[0].tsc == 0) {
+				continue;
+			}
+
+			populate_events(parser, history, history->num_entries);
+		}
+	} else {
+		history = spdk_get_per_lcore_history(parser->histories, opts->lcore);
+		if (history->num_entries > 0 && history->entries[0].tsc != 0) {
+			populate_events(parser, history, history->num_entries);
+		}
+	}
+
 	return parser;
 error:
 	spdk_trace_parser_cleanup(parser);
@@ -127,7 +225,7 @@ cleanup(struct spdk_trace_parser *parser)
 		close(parser->fd);
 	}
 
-	free(parser);
+	delete parser;
 }
 
 extern "C" {
