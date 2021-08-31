@@ -34,6 +34,7 @@
 #include "spdk/stdinc.h"
 #include "spdk/log.h"
 #include "spdk/trace.h"
+#include "spdk/util.h"
 
 struct spdk_trace_parser {
 	struct spdk_trace_histories	*histories;
@@ -141,6 +142,13 @@ extern "C" {
 	spdk_trace_parser_cleanup(struct spdk_trace_parser *parser)
 	{
 		cleanup(parser);
+	}
+
+	void
+	spdk_trace_parser_get_flags(struct spdk_trace_parser *parser,
+				    struct spdk_trace_flags **flags)
+	{
+		*flags = &parser->histories->flags;
 	}
 
 } /* extern "C" */

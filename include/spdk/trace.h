@@ -465,6 +465,14 @@ struct spdk_trace_parser *spdk_trace_parser_init(const struct spdk_trace_parser_
  */
 void spdk_trace_parser_cleanup(struct spdk_trace_parser *parser);
 
+/**
+ * Return trace flags describing the traces.
+ *
+ * \param parser Parser object to be used.
+ * \param flags Pointer to trace flags.
+ */
+void spdk_trace_parser_get_flags(struct spdk_trace_parser *parser, struct spdk_trace_flags **flags);
+
 #ifdef __cplusplus
 }
 #endif
