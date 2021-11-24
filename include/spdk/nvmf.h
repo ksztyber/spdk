@@ -114,6 +114,9 @@ struct spdk_nvmf_transport_opts {
 	 * New added fields should be put at the end of the struct.
 	 */
 	size_t opts_size;
+
+	/* Use zero-copy operations if the underlying bdev supports them */
+	bool		zcopy;
 };
 
 struct spdk_nvmf_listen_opts {
