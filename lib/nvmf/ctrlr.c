@@ -789,11 +789,9 @@ nvmf_subsystem_pg_from_connect_cmd(struct spdk_nvmf_request *req)
 static void
 nvmf_add_to_outstanding_queue(struct spdk_nvmf_request *req)
 {
-	if (!spdk_nvmf_request_using_zcopy(req)) {
-		/* if using zcopy then request has been added when the start zcopy was actioned */
-		struct spdk_nvmf_qpair *qpair = req->qpair;
-		TAILQ_INSERT_TAIL(&qpair->outstanding, req, link);
-	}
+	struct spdk_nvmf_qpair *qpair = req->qpair;
+
+	TAILQ_INSERT_TAIL(&qpair->outstanding, req, link);
 }
 
 int
