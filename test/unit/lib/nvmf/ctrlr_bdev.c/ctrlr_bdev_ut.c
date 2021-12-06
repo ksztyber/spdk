@@ -531,7 +531,7 @@ test_nvmf_bdev_ctrlr_identify_ns(void)
 }
 
 static void
-test_nvmf_bdev_ctrlr_start_zcopy(void)
+test_nvmf_bdev_ctrlr_zcopy_start(void)
 {
 	int rc;
 	struct spdk_bdev bdev = {};
@@ -587,7 +587,7 @@ test_nvmf_bdev_ctrlr_start_zcopy(void)
 	write_cmd.cdw12 = 1;	/* NLB: CDW12 bits 15:00, 0's based */
 	write_req.length = (write_cmd.cdw12 + 1) * bdev.blocklen;
 
-	rc = nvmf_bdev_ctrlr_start_zcopy(&bdev, desc, &ch, &write_req);
+	rc = nvmf_bdev_ctrlr_zcopy_start(&bdev, desc, &ch, &write_req);
 
 	CU_ASSERT(rc == 0);
 
@@ -596,7 +596,7 @@ test_nvmf_bdev_ctrlr_start_zcopy(void)
 	write_cmd.cdw12 = 100;	/* NLB: CDW12 bits 15:00, 0's based */
 	write_req.length = (write_cmd.cdw12 + 1) * bdev.blocklen;
 
-	rc = nvmf_bdev_ctrlr_start_zcopy(&bdev, desc, &ch, &write_req);
+	rc = nvmf_bdev_ctrlr_zcopy_start(&bdev, desc, &ch, &write_req);
 
 	CU_ASSERT(rc < 0);
 
@@ -605,7 +605,7 @@ test_nvmf_bdev_ctrlr_start_zcopy(void)
 	write_cmd.cdw12 = 1;	/* NLB: CDW12 bits 15:00, 0's based */
 	write_req.length = (write_cmd.cdw12 + 1) * bdev.blocklen - 1;
 
-	rc = nvmf_bdev_ctrlr_start_zcopy(&bdev, desc, &ch, &write_req);
+	rc = nvmf_bdev_ctrlr_zcopy_start(&bdev, desc, &ch, &write_req);
 
 	CU_ASSERT(rc < 0);
 }
@@ -761,7 +761,7 @@ int main(int argc, char **argv)
 	CU_ADD_TEST(suite, test_get_dif_ctx);
 	CU_ADD_TEST(suite, test_nvmf_bdev_ctrlr_identify_ns);
 	CU_ADD_TEST(suite, test_spdk_nvmf_bdev_ctrlr_compare_and_write_cmd);
-	CU_ADD_TEST(suite, test_nvmf_bdev_ctrlr_start_zcopy);
+	CU_ADD_TEST(suite, test_nvmf_bdev_ctrlr_zcopy_start);
 	CU_ADD_TEST(suite, test_nvmf_bdev_ctrlr_cmd);
 	CU_ADD_TEST(suite, test_nvmf_bdev_ctrlr_read_write_cmd);
 
