@@ -3721,11 +3721,18 @@ spdk_nvmf_request_zcopy_start(struct spdk_nvmf_request *req)
 	spdk_nvmf_request_exec(req);
 }
 
-int
+void
 spdk_nvmf_request_zcopy_end(struct spdk_nvmf_request *req, bool commit)
 {
+	int status;
+
+	assert(req->zcopy_phase == NVMF_ZCOPY_PHASE_EXECUTE);
 	req->zcopy_phase = NVMF_ZCOPY_PHASE_END_PENDING;
-	return nvmf_bdev_ctrlr_zcopy_end(req, commit);
+
+	status = nvmf_bdev_ctrlr_zcopy_end(req, commit);
+	if (status == SPDK_NVMF_REQUEST_EXEC_STATUS_COMPLETE) {
+		_nvmf_request_complete(req);
+	}
 }
 
 int
