@@ -956,6 +956,15 @@ nvmf_tcp_qpair_init_mem_resource(struct spdk_nvmf_tcp_qpair *tqpair)
 	}
 
 	tqpair->resource_count = opts->max_queue_depth;
+	if (opts->zcopy) {
+		/* When using zero-copy, requests aren't always immediately returned to the free
+		 * pool (as they need to wait for zcopy_end to finish), meaning that the host can
+		 * receive a response and send another request before that buffer is freed.  This
+		 * could lead to exhausting all request descriptors, even if the host doesn't
+		 * exceeed max_queue_depth.  Double the amount of descriptors to prevent this.
+		 */
+		tqpair->resource_count *= 2;
+	}
 
 	tqpair->reqs = calloc(tqpair->resource_count, sizeof(*tqpair->reqs));
 	if (!tqpair->reqs) {
