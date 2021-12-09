@@ -71,6 +71,12 @@ enum spdk_nvmf_tcp_req_state {
 	/* The request is queued until a data buffer is available. */
 	TCP_REQUEST_STATE_NEED_BUFFER,
 
+	/* The request is waiting for zcopy_start to finish */
+	TCP_REQUEST_STATE_AWAITING_ZCOPY_START,
+
+	/* The request has received a zero-copy buffer */
+	TCP_REQUEST_STATE_ZCOPY_START_COMPLETED,
+
 	/* The request is currently transferring data from the host to the controller. */
 	TCP_REQUEST_STATE_TRANSFERRING_HOST_TO_CONTROLLER,
 
@@ -83,6 +89,9 @@ enum spdk_nvmf_tcp_req_state {
 	/* The request is currently executing at the block device */
 	TCP_REQUEST_STATE_EXECUTING,
 
+	/* The request is waiting for zcopy buffers to be commited */
+	TCP_REQUEST_STATE_AWAITING_ZCOPY_COMMIT,
+
 	/* The request finished executing at the block device */
 	TCP_REQUEST_STATE_EXECUTED,
 
@@ -91,6 +100,9 @@ enum spdk_nvmf_tcp_req_state {
 
 	/* The request is currently transferring final pdus from the controller to the host. */
 	TCP_REQUEST_STATE_TRANSFERRING_CONTROLLER_TO_HOST,
+
+	/* The request is waiting for zcopy buffers to be released (without commit) */
+	TCP_REQUEST_STATE_AWAITING_ZCOPY_RELEASE,
 
 	/* The request completed and can be marked free. */
 	TCP_REQUEST_STATE_COMPLETED,
@@ -1453,6 +1465,9 @@ nvmf_tcp_capsule_cmd_payload_handle(struct spdk_nvmf_tcp_transport *ttransport,
 	tcp_req = pdu->req;
 	assert(tcp_req != NULL);
 
+	/* Zero-copy request don't support ICD */
+	assert(!spdk_nvmf_request_using_zcopy(&tcp_req->req));
+
 	if (capsule_cmd->common.pdo > SPDK_NVME_TCP_PDU_PDO_MAX_OFFSET) {
 		SPDK_ERRLOG("Expected ICReq capsule_cmd pdu offset <= %d, got %c\n",
 			    SPDK_NVME_TCP_PDU_PDO_MAX_OFFSET, capsule_cmd->common.pdo);
@@ -2220,6 +2235,11 @@ nvmf_tcp_req_parse_sgl(struct spdk_nvmf_tcp_req *tcp_req,
 			req->dif.elba_length = length;
 		}
 
+		if (nvmf_ctrlr_use_zcopy(req)) {
+			SPDK_DEBUGLOG(nvmf_tcp, "Using zero-copy to execute request %p\n", tcp_req);
+			return 0;
+		}
+
 		if (spdk_nvmf_request_get_buffers(req, group, transport, length)) {
 			/* No available buffers. Queue this request up. */
 			SPDK_DEBUGLOG(nvmf_tcp, "No available large data buffers. Queueing request %p\n",
@@ -2604,6 +2624,19 @@ nvmf_tcp_req_process(struct spdk_nvmf_tcp_transport *ttransport,
 				break;
 			}
 
+			/* If the request can be serviced through zcopy, try to get a zcopy buffer */
+			if (spdk_nvmf_request_using_zcopy(&tcp_req->req)) {
+				if (spdk_unlikely(tcp_req->req.dif_enabled)) {
+					assert(tcp_req->req.dif.elba_length >= tcp_req->req.length);
+					tcp_req->req.length = tcp_req->req.dif.elba_length;
+				}
+
+				STAILQ_REMOVE(&group->pending_buf_queue, &tcp_req->req, spdk_nvmf_request, buf_link);
+				nvmf_tcp_req_set_state(tcp_req, TCP_REQUEST_STATE_AWAITING_ZCOPY_START);
+				spdk_nvmf_request_zcopy_start(&tcp_req->req);
+				break;
+			}
+
 			if (!tcp_req->req.data) {
 				SPDK_DEBUGLOG(nvmf_tcp, "No buffer allocated for tcp_req(%p) on tqpair(%p\n)",
 					      tcp_req, tqpair);
@@ -2636,6 +2669,24 @@ nvmf_tcp_req_process(struct spdk_nvmf_tcp_transport *ttransport,
 
 			nvmf_tcp_req_set_state(tcp_req, TCP_REQUEST_STATE_READY_TO_EXECUTE);
 			break;
+		case TCP_REQUEST_STATE_AWAITING_ZCOPY_START:
+			/* Some external code must kick a request into  TCP_REQUEST_STATE_ZCOPY_START_COMPLETED
+			 * to escape this state. */
+			break;
+		case TCP_REQUEST_STATE_ZCOPY_START_COMPLETED:
+			if (spdk_unlikely(spdk_nvme_cpl_is_error(&tcp_req->req.rsp->nvme_cpl))) {
+				SPDK_DEBUGLOG(nvmf_tcp, "Zero-copy start failed for tcp_req(%p) on tqpair=%p\n",
+					      tcp_req, tqpair);
+				nvmf_tcp_req_set_state(tcp_req, TCP_REQUEST_STATE_READY_TO_COMPLETE);
+				break;
+			}
+			if (tcp_req->req.xfer == SPDK_NVME_DATA_HOST_TO_CONTROLLER) {
+				SPDK_DEBUGLOG(nvmf_tcp, "Sending R2T for tcp_req(%p) on tqpair=%p\n", tcp_req, tqpair);
+				nvmf_tcp_send_r2t_pdu(tqpair, tcp_req);
+			} else {
+				nvmf_tcp_req_set_state(tcp_req, TCP_REQUEST_STATE_EXECUTED);
+			}
+			break;
 		case TCP_REQUEST_STATE_AWAITING_R2T_ACK:
 			spdk_trace_record(TRACE_TCP_REQUEST_STATE_AWAIT_R2T_ACK, 0, 0, (uintptr_t)tcp_req,
 					  tqpair);
@@ -2657,11 +2708,23 @@ nvmf_tcp_req_process(struct spdk_nvmf_tcp_transport *ttransport,
 				tcp_req->req.length = tcp_req->req.dif.elba_length;
 			}
 
-			nvmf_tcp_req_set_state(tcp_req, TCP_REQUEST_STATE_EXECUTING);
-			spdk_nvmf_request_exec(&tcp_req->req);
+			if (!spdk_nvmf_request_using_zcopy(&tcp_req->req)) {
+				nvmf_tcp_req_set_state(tcp_req, TCP_REQUEST_STATE_EXECUTING);
+				spdk_nvmf_request_exec(&tcp_req->req);
+			} else {
+				/* For zero-copy, only requests with data coming from host to the
+				 * controller can end up here. */
+				assert(tcp_req->req.xfer == SPDK_NVME_DATA_HOST_TO_CONTROLLER);
+				nvmf_tcp_req_set_state(tcp_req, TCP_REQUEST_STATE_AWAITING_ZCOPY_COMMIT);
+				spdk_nvmf_request_zcopy_end(&tcp_req->req, true);
+			}
 			break;
 		case TCP_REQUEST_STATE_EXECUTING:
 			spdk_trace_record(TRACE_TCP_REQUEST_STATE_EXECUTING, 0, 0, (uintptr_t)tcp_req, tqpair);
+			/* Some external code must kick a request into TCP_REQUEST_STATE_EXECUTED
+			 * to escape this state. */
+			break;
+		case TCP_REQUEST_STATE_AWAITING_ZCOPY_COMMIT:
 			/* Some external code must kick a request into TCP_REQUEST_STATE_EXECUTED
 			 * to escape this state. */
 			break;
@@ -2686,6 +2749,10 @@ nvmf_tcp_req_process(struct spdk_nvmf_tcp_transport *ttransport,
 			/* Some external code must kick a request into TCP_REQUEST_STATE_COMPLETED
 			 * to escape this state. */
 			break;
+		case TCP_REQUEST_STATE_AWAITING_ZCOPY_RELEASE:
+			/* Some external code must kick a request into TCP_REQUEST_STATE_COMPLETED
+			 * to escape this state. */
+			break;
 		case TCP_REQUEST_STATE_COMPLETED:
 			spdk_trace_record(TRACE_TCP_REQUEST_STATE_COMPLETED, 0, 0, (uintptr_t)tcp_req, tqpair);
 			if (tcp_req->req.data_from_pool) {
@@ -2696,6 +2763,15 @@ nvmf_tcp_req_process(struct spdk_nvmf_tcp_transport *ttransport,
 				assert(tgroup->control_msg_list);
 				SPDK_DEBUGLOG(nvmf_tcp, "Put buf to control msg list\n");
 				nvmf_tcp_control_msg_put(tgroup->control_msg_list, tcp_req->req.data);
+			} else if (tcp_req->req.zcopy_bdev_io != NULL) {
+				/* If the requests has an unreleased bdev_io, it must be either a
+				 * read or a failed write */
+				assert(spdk_nvmf_request_using_zcopy(&tcp_req->req));
+				assert(tcp_req->req.xfer == SPDK_NVME_DATA_CONTROLLER_TO_HOST ||
+				       spdk_nvme_cpl_is_error(&tcp_req->req.rsp->nvme_cpl));
+				nvmf_tcp_req_set_state(tcp_req, TCP_REQUEST_STATE_AWAITING_ZCOPY_RELEASE);
+				spdk_nvmf_request_zcopy_end(&tcp_req->req, false);
+				break;
 			}
 			tcp_req->req.length = 0;
 			tcp_req->req.iovcnt = 0;
@@ -2816,7 +2892,23 @@ nvmf_tcp_req_complete(struct spdk_nvmf_request *req)
 	ttransport = SPDK_CONTAINEROF(req->qpair->transport, struct spdk_nvmf_tcp_transport, transport);
 	tcp_req = SPDK_CONTAINEROF(req, struct spdk_nvmf_tcp_req, req);
 
-	nvmf_tcp_req_set_state(tcp_req, TCP_REQUEST_STATE_EXECUTED);
+	switch (tcp_req->state) {
+	case TCP_REQUEST_STATE_EXECUTING:
+	case TCP_REQUEST_STATE_AWAITING_ZCOPY_COMMIT:
+		nvmf_tcp_req_set_state(tcp_req, TCP_REQUEST_STATE_EXECUTED);
+		break;
+	case TCP_REQUEST_STATE_AWAITING_ZCOPY_START:
+		nvmf_tcp_req_set_state(tcp_req, TCP_REQUEST_STATE_ZCOPY_START_COMPLETED);
+		break;
+	case TCP_REQUEST_STATE_AWAITING_ZCOPY_RELEASE:
+		nvmf_tcp_req_set_state(tcp_req, TCP_REQUEST_STATE_COMPLETED);
+		break;
+	default:
+		/* This can happen when a request is manually completed, e.g. when a qpair is being
+		 * disconnected. */
+		break;
+	}
+
 	nvmf_tcp_req_process(ttransport, tcp_req);
 
 	return 0;
