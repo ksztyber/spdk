@@ -2766,6 +2766,20 @@ nvmf_qpair_abort_aer(struct spdk_nvmf_qpair *qpair, uint16_t cid)
 	return false;
 }
 
+void
+nvmf_qpair_abort_zcopy_requests(struct spdk_nvmf_qpair *qpair)
+{
+	struct spdk_nvmf_request *req, *tmp;
+
+	TAILQ_FOREACH_SAFE(req, &qpair->outstanding, link, tmp) {
+		if (req->zcopy_phase == NVMF_ZCOPY_PHASE_EXECUTE) {
+			req->rsp->nvme_cpl.status.sct = SPDK_NVME_SCT_GENERIC;
+			req->rsp->nvme_cpl.status.sc = SPDK_NVME_SC_ABORTED_BY_REQUEST;
+			_nvmf_request_complete(req);
+		}
+	}
+}
+
 static void
 nvmf_qpair_abort_request(struct spdk_nvmf_qpair *qpair, struct spdk_nvmf_request *req)
 {

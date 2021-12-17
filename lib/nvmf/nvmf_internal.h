@@ -446,6 +446,13 @@ void nvmf_ctrlr_reservation_notice_log(struct spdk_nvmf_ctrlr *ctrlr,
 void nvmf_ctrlr_abort_aer(struct spdk_nvmf_ctrlr *ctrlr);
 
 /*
+ * Abort zero-copy requests that already got the buffer (received zcopy_start cb), but haven't
+ * started zcopy_end.  These requests are kept on the outstanding queue, but are not waiting for a
+ * completion from the bdev layer, so we need a kick to abort them when disconnecting a qpair.
+ */
+void nvmf_qpair_abort_zcopy_requests(struct spdk_nvmf_qpair *qpair);
+
+/*
  * Free aer simply frees the rdma resources for the aer without informing the host.
  * This function should be called when deleting a qpair when one wants to make sure
  * the qpair is completely empty before freeing the request. The reason we free the
