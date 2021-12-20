@@ -3068,6 +3068,8 @@ _nvmf_tcp_qpair_abort_request(void *ctx)
 
 	switch (tcp_req_to_abort->state) {
 	case TCP_REQUEST_STATE_EXECUTING:
+	case TCP_REQUEST_STATE_AWAITING_ZCOPY_START:
+	case TCP_REQUEST_STATE_AWAITING_ZCOPY_COMMIT:
 		rc = nvmf_ctrlr_abort_request(req);
 		if (rc == SPDK_NVMF_REQUEST_EXEC_STATUS_ASYNCHRONOUS) {
 			return SPDK_POLLER_BUSY;
@@ -3082,6 +3084,7 @@ _nvmf_tcp_qpair_abort_request(void *ctx)
 		break;
 
 	case TCP_REQUEST_STATE_AWAITING_R2T_ACK:
+	case TCP_REQUEST_STATE_ZCOPY_START_COMPLETED:
 		nvmf_tcp_req_set_abort_status(req, tcp_req_to_abort);
 		break;
 
@@ -3090,6 +3093,10 @@ _nvmf_tcp_qpair_abort_request(void *ctx)
 			req->poller = SPDK_POLLER_REGISTER(_nvmf_tcp_qpair_abort_request, req, 0);
 			return SPDK_POLLER_BUSY;
 		}
+		break;
+
+	case TCP_REQUEST_STATE_AWAITING_ZCOPY_RELEASE:
+		/* TODO: should we succeed or fail the abort req? */
 		break;
 
 	default:
