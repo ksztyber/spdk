@@ -3,6 +3,7 @@
  *   All rights reserved.
  */
 
+#include "spdk/assert.h"
 #include "spdk/stdinc.h"
 #include "spdk/thread.h"
 #include "spdk/env.h"
@@ -25,6 +26,7 @@ static int g_port;
 static bool g_is_server;
 static int g_zcopy;
 static bool g_verbose;
+static bool g_async;
 
 /*
  * We'll use this struct to gather housekeeping hello_context to pass between
@@ -51,6 +53,19 @@ struct hello_context_t {
 	int rc;
 };
 
+struct hello_client {
+	struct spdk_sock_request	req;
+	struct iovec			iov;
+	struct spdk_sock		*sock;
+	struct hello_context_t		*ctx;
+	bool				busy;
+	char				buf[BUFFER_SIZE];
+};
+
+/* There cannot be any padding between the request and the iovec */
+SPDK_STATIC_ASSERT(offsetof(struct hello_client, iov) == sizeof(struct spdk_sock_request),
+		   "Unexpected structure padding");
+
 /*
  * Usage function for printing parameters that are specific to this application
  */
@@ -64,6 +79,7 @@ hello_sock_usage(void)
 	printf(" -V            print out additional informations\n");
 	printf(" -z            disable zero copy send for the given sock implementation\n");
 	printf(" -Z            enable zero copy send for the given sock implementation\n");
+	printf(" -a            use asynchronous readv/writev interfaces\n");
 }
 
 /*
@@ -96,6 +112,9 @@ static int hello_sock_parse_arg(int ch, char *arg)
 		break;
 	case 'z':
 		g_zcopy = 0;
+		break;
+	case 'a':
+		g_async = true;
 		break;
 	default:
 		return -EINVAL;
@@ -267,6 +286,98 @@ hello_sock_cb(void *arg, struct spdk_sock_group *group, struct spdk_sock *sock)
 	spdk_sock_close(&sock);
 }
 
+static void
+free_client(struct hello_client *client)
+{
+	spdk_sock_group_remove_sock(client->ctx->group, client->sock);
+	spdk_sock_close(&client->sock);
+	free(client);
+}
+
+static void
+hello_sock_async_writev_cb(void *client_ctx, int status)
+{
+	struct hello_client *client = client_ctx;
+	struct hello_context_t *ctx = client->ctx;
+
+	if (status != 0) {
+		SPDK_NOTICELOG("Connection closed\n");
+		free_client(client);
+		return;
+	}
+
+	ctx->bytes_out += client->iov.iov_len;
+	client->busy = false;
+}
+
+static void
+hello_sock_async_readv_cb(void *client_ctx, int status)
+{
+	struct hello_client *client = client_ctx;
+	struct hello_context_t *ctx = client->ctx;
+
+	if (status <= 0) {
+		SPDK_NOTICELOG("Connection closed\n");
+		free_client(client);
+		return;
+	}
+
+	ctx->bytes_in += status;
+	client->iov.iov_len = status;
+	client->req.cb_fn = hello_sock_async_writev_cb;
+
+	spdk_sock_writev_async(client->sock, &client->req);
+}
+
+static void
+hello_sock_async_cb(void *arg, struct spdk_sock_group *group, struct spdk_sock *sock)
+{
+	struct hello_client *client = arg;
+
+	/* A request is already being serviced */
+	if (client->busy) {
+		return;
+	}
+
+	client->busy = true;
+	client->iov.iov_len = sizeof(client->buf);
+	client->req.cb_fn = hello_sock_async_readv_cb;
+
+	spdk_sock_readv_async(sock, &client->req);
+}
+
+static int
+hello_sock_accept_client(struct hello_context_t *ctx, struct spdk_sock *sock)
+{
+	struct hello_client *client;
+	int rc;
+
+	if (!g_async) {
+		return spdk_sock_group_add_sock(ctx->group, sock, hello_sock_cb, ctx);
+	}
+
+	client = calloc(1, sizeof(*client));
+	if (!client) {
+		return -ENOMEM;
+	}
+
+	client->sock = sock;
+	client->ctx = ctx;
+	client->req.iovcnt = 1;
+	client->req.cb_fn = hello_sock_async_readv_cb;
+	client->req.cb_arg = client;
+	client->iov.iov_base = client->buf;
+	client->iov.iov_len = sizeof(client->buf);
+
+	rc = spdk_sock_group_add_sock(ctx->group, sock, hello_sock_async_cb, client);
+	if (rc != 0) {
+		free(client);
+		return rc;
+	}
+
+	return 0;
+}
+
 static int
 hello_sock_accept_poll(void *arg)
 {
@@ -295,9 +406,7 @@ hello_sock_accept_poll(void *arg)
 			SPDK_NOTICELOG("Accepting a new connection from (%s, %hu) to (%s, %hu)\n",
 				       caddr, cport, saddr, sport);
 
-			rc = spdk_sock_group_add_sock(ctx->group, sock,
-						      hello_sock_cb, ctx);
-
+			rc = hello_sock_accept_client(ctx, sock);
 			if (rc < 0) {
 				spdk_sock_close(&sock);
 				SPDK_ERRLOG("failed\n");
@@ -406,7 +515,7 @@ main(int argc, char **argv)
 	opts.name = "hello_sock";
 	opts.shutdown_cb = hello_sock_shutdown_cb;
 
-	if ((rc = spdk_app_parse_args(argc, argv, &opts, "H:N:P:SVzZ", NULL, hello_sock_parse_arg,
+	if ((rc = spdk_app_parse_args(argc, argv, &opts, "aH:N:P:SVzZ", NULL, hello_sock_parse_arg,
 				      hello_sock_usage)) != SPDK_APP_PARSE_ARGS_SUCCESS) {
 		exit(rc);
 	}
