@@ -31,6 +31,7 @@ enum spdk_sock_task_type {
 	SPDK_SOCK_TASK_POLLIN = 0,
 	SPDK_SOCK_TASK_ERRQUEUE,
 	SPDK_SOCK_TASK_WRITE,
+	SPDK_SOCK_TASK_READ,
 	SPDK_SOCK_TASK_CANCEL,
 };
 
@@ -64,6 +65,7 @@ struct spdk_uring_sock {
 	struct spdk_uring_task			errqueue_task;
 	struct spdk_uring_task			pollin_task;
 	struct spdk_uring_task			cancel_task;
+	struct spdk_uring_task			read_task;
 	struct spdk_pipe			*recv_pipe;
 	void					*recv_buf;
 	int					recv_buf_sz;
@@ -709,6 +711,12 @@ uring_sock_readv(struct spdk_sock *_sock, struct iovec *iov, int iovcnt)
 	int rc, i;
 	size_t len;
 
+	/* Only a single read operation can be active at a time */
+	if (spdk_unlikely(sock->base.read_req != NULL)) {
+		errno = EAGAIN;
+		return -1;
+	}
+
 	if (sock->recv_pipe == NULL) {
 		return sock_readv(sock->fd, iov, iovcnt);
 	}
@@ -848,6 +856,32 @@ sock_complete_write_reqs(struct spdk_sock *_sock, ssize_t rc, bool is_zcopy)
 	return 0;
 }
 
+static bool
+sock_complete_read_req(struct spdk_sock *_sock, ssize_t rc)
+{
+	struct spdk_sock_request *req = _sock->read_req;
+
+	assert(req != NULL);
+
+	/* Zero means that the peer has performed an orderly shutdown */
+	if (spdk_likely(rc > 0)) {
+		rc = sock_request_advance_offset(req, rc);
+		if (rc < 0) {
+			/* Read portion of req's data, waiting for the rest */
+			return false;
+		}
+
+		/* We couldn't have read more than req's remaining buffer size */
+		assert(rc == 0);
+		rc = (ssize_t)req->internal.offset;
+	}
+
+	_sock->read_req = NULL;
+	spdk_sock_request_complete(_sock, req, rc);
+
+	return true;
+}
+
 #ifdef SPDK_ZEROCOPY
 static int
 _sock_check_zcopy(struct spdk_sock *_sock, int status)
@@ -984,10 +1018,13 @@ _sock_prep_pollin(struct spdk_sock *_sock)
 {
 	struct spdk_uring_sock *sock = __uring_sock(_sock);
 	struct spdk_uring_task *task = &sock->pollin_task;
+	struct spdk_uring_task *read_task = &sock->read_task;
 	struct io_uring_sqe *sqe;
 
 	/* Do not prepare pollin event */
-	if (task->status == SPDK_URING_SOCK_TASK_IN_PROCESS || (sock->pending_recv && !sock->zcopy)) {
+	if (task->status == SPDK_URING_SOCK_TASK_IN_PROCESS ||
+	    (!sock->zcopy && (sock->pending_recv ||
+			      read_task->status == SPDK_URING_SOCK_TASK_IN_PROCESS))) {
 		return;
 	}
 
@@ -1016,6 +1053,32 @@ _sock_prep_cancel_task(struct spdk_sock *_sock, void *user_data)
 
 	sqe = io_uring_get_sqe(&sock->group->uring);
 	io_uring_prep_cancel(sqe, user_data, 0);
+	io_uring_sqe_set_data(sqe, task);
+	task->status = SPDK_URING_SOCK_TASK_IN_PROCESS;
+}
+
+static void
+_sock_prep_read_task(struct spdk_uring_sock *sock)
+{
+	struct spdk_uring_task *task = &sock->read_task;
+	struct spdk_sock_request *req = sock->base.read_req;
+	struct io_uring_sqe *sqe;
+
+	if (task->status != SPDK_URING_SOCK_TASK_NOT_IN_USE) {
+		return;
+	}
+
+	/* If we're submitting a read task, the pipe must be empty */
+	assert(sock->recv_pipe == NULL || spdk_pipe_reader_bytes_available(sock->recv_pipe) == 0);
+	assert(sock->group != NULL);
+	sock->group->io_queued++;
+
+	task->msg.msg_iov = task->iovs;
+	task->msg.msg_iovlen = spdk_sock_prep_req(req, task->iovs, 0, NULL);
+	assert(task->msg.msg_iovlen > 0);
+
+	sqe = io_uring_get_sqe(&sock->group->uring);
+	io_uring_prep_recvmsg(sqe, sock->fd, &task->msg, MSG_WAITALL);
 	io_uring_sqe_set_data(sqe, task);
 	task->status = SPDK_URING_SOCK_TASK_IN_PROCESS;
 }
@@ -1072,6 +1135,9 @@ sock_uring_group_reap(struct spdk_uring_sock_group_impl *group, int max, int max
 					sock->pending_recv = true;
 					TAILQ_INSERT_TAIL(&group->pending_recv, sock, link);
 				}
+				if (sock->base.read_req != NULL) {
+					_sock_prep_read_task(sock);
+				}
 			}
 			break;
 		case SPDK_SOCK_TASK_WRITE:
@@ -1098,6 +1164,14 @@ sock_uring_group_reap(struct spdk_uring_sock_group_impl *group, int max, int max
 		case SPDK_SOCK_TASK_CANCEL:
 			/* Do nothing */
 			break;
+		case SPDK_SOCK_TASK_READ:
+			if (spdk_unlikely(status < 0)) {
+				sock->connection_status = status;
+				spdk_sock_abort_requests(&sock->base);
+			} else {
+				sock_complete_read_req(&sock->base, status);
+			}
+			break;
 		default:
 			SPDK_UNREACHABLE();
 		}
@@ -1112,12 +1186,13 @@ sock_uring_group_reap(struct spdk_uring_sock_group_impl *group, int max, int max
 			break;
 		}
 
-		if (spdk_unlikely(sock->base.cb_fn == NULL) ||
+		if (spdk_unlikely(sock->base.cb_fn == NULL) || sock->base.read_req != NULL ||
 		    (sock->recv_pipe == NULL || spdk_pipe_reader_bytes_available(sock->recv_pipe) == 0)) {
 			sock->pending_recv = false;
 			TAILQ_REMOVE(&group->pending_recv, sock, link);
-			if (spdk_unlikely(sock->base.cb_fn == NULL)) {
-				/* If the socket's cb_fn is NULL, do not add it to socks array */
+			if (sock->base.read_req != NULL || spdk_unlikely(sock->base.cb_fn == NULL)) {
+				/* Don't add the socket to the array if there's an outstanding async
+				 * read request or if its cb_fn is NULL */
 				continue;
 			}
 		}
@@ -1252,9 +1327,32 @@ uring_sock_writev_async(struct spdk_sock *_sock, struct spdk_sock_request *req)
 }
 
 static void
-uring_sock_readv_async(struct spdk_sock *sock, struct spdk_sock_request *req)
+uring_sock_readv_async(struct spdk_sock *_sock, struct spdk_sock_request *req)
 {
-	req->cb_fn(req->cb_arg, -ENOTSUP);
+	struct spdk_uring_sock *sock = __uring_sock(_sock);
+	int rc;
+
+	/* Only a single read operation can be active at a time */
+	if (spdk_unlikely(sock->base.read_req != NULL)) {
+		spdk_sock_request_complete(_sock, req, -EAGAIN);
+		return;
+	}
+
+	if (spdk_unlikely(sock->connection_status)) {
+		spdk_sock_request_complete(_sock, req, 0);
+		return;
+	}
+
+	sock->base.read_req = req;
+	if (sock->recv_pipe != NULL && spdk_pipe_reader_bytes_available(sock->recv_pipe) > 0) {
+		rc = uring_sock_recv_from_pipe(sock, SPDK_SOCK_REQUEST_IOV(req, 0), req->iovcnt);
+		if (sock_complete_read_req(_sock, rc)) {
+			return;
+		}
+	}
+
+	assert(sock->read_task.status == SPDK_URING_SOCK_TASK_NOT_IN_USE);
+	_sock_prep_read_task(sock);
 }
 
 static int
@@ -1404,6 +1502,9 @@ uring_sock_group_impl_add_sock(struct spdk_sock_group_impl *_group,
 	sock->cancel_task.sock = sock;
 	sock->cancel_task.type = SPDK_SOCK_TASK_CANCEL;
 
+	sock->read_task.sock = sock;
+	sock->read_task.type = SPDK_SOCK_TASK_READ;
+
 	/* switched from another polling group due to scheduling */
 	if (spdk_unlikely(sock->recv_pipe != NULL &&
 			  (spdk_pipe_reader_bytes_available(sock->recv_pipe) > 0))) {
@@ -1505,10 +1606,19 @@ uring_sock_group_impl_remove_sock(struct spdk_sock_group_impl *_group,
 		}
 	}
 
+	if (sock->read_task.status != SPDK_URING_SOCK_TASK_NOT_IN_USE) {
+		_sock_prep_cancel_task(_sock, &sock->read_task);
+		while ((sock->read_task.status != SPDK_URING_SOCK_TASK_NOT_IN_USE) ||
+		       (sock->cancel_task.status != SPDK_URING_SOCK_TASK_NOT_IN_USE)) {
+			uring_sock_group_impl_poll(_group, 32, NULL);
+		}
+	}
+
 	/* Make sure the cancelling the tasks above didn't cause sending new requests */
 	assert(sock->write_task.status == SPDK_URING_SOCK_TASK_NOT_IN_USE);
 	assert(sock->pollin_task.status == SPDK_URING_SOCK_TASK_NOT_IN_USE);
 	assert(sock->errqueue_task.status == SPDK_URING_SOCK_TASK_NOT_IN_USE);
+	assert(sock->read_task.status == SPDK_URING_SOCK_TASK_NOT_IN_USE);
 
 	if (sock->pending_recv) {
 		TAILQ_REMOVE(&group->pending_recv, sock, link);
