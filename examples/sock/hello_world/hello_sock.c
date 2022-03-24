@@ -27,6 +27,7 @@ static bool g_is_server;
 static int g_zcopy;
 static bool g_verbose;
 static bool g_async;
+static int g_bufsize = BUFFER_SIZE;
 
 /*
  * We'll use this struct to gather housekeeping hello_context to pass between
@@ -38,6 +39,7 @@ struct hello_context_t {
 	char *sock_impl_name;
 	int port;
 	int zcopy;
+	int bufsize;
 
 	bool verbose;
 	int bytes_in;
@@ -80,6 +82,7 @@ hello_sock_usage(void)
 	printf(" -z            disable zero copy send for the given sock implementation\n");
 	printf(" -Z            enable zero copy send for the given sock implementation\n");
 	printf(" -a            use asynchronous readv/writev interfaces\n");
+	printf(" -b buffer_size buffer size to use for IOs\n");
 }
 
 /*
@@ -115,6 +118,14 @@ static int hello_sock_parse_arg(int ch, char *arg)
 		break;
 	case 'a':
 		g_async = true;
+		break;
+	case 'b':
+		g_bufsize = spdk_strtol(arg, 10);
+		if (g_bufsize < 1 || g_bufsize > BUFFER_SIZE) {
+			fprintf(stderr, "Invalid buffer size, must be between 1-%d bytes\n",
+				BUFFER_SIZE);
+			return -EINVAL;
+		}
 		break;
 	default:
 		return -EINVAL;
@@ -159,7 +170,7 @@ hello_sock_recv_poll(void *arg)
 	/*
 	 * Get response
 	 */
-	rc = spdk_sock_recv(ctx->sock, buf_in, sizeof(buf_in) - 1);
+	rc = spdk_sock_recv(ctx->sock, buf_in, ctx->bufsize - 1);
 
 	if (rc <= 0) {
 		if (errno == EAGAIN || errno == EWOULDBLOCK) {
@@ -189,7 +200,7 @@ hello_sock_writev_poll(void *arg)
 	struct iovec iov;
 	ssize_t n;
 
-	n = read(STDIN_FILENO, buf_out, sizeof(buf_out));
+	n = read(STDIN_FILENO, buf_out, ctx->bufsize);
 	if (n == 0 || !g_is_running) {
 		/* EOF */
 		SPDK_NOTICELOG("Closing connection...\n");
@@ -257,7 +268,7 @@ hello_sock_cb(void *arg, struct spdk_sock_group *group, struct spdk_sock *sock)
 	struct iovec iov;
 	struct hello_context_t *ctx = arg;
 
-	n = spdk_sock_recv(sock, buf, sizeof(buf));
+	n = spdk_sock_recv(sock, buf, ctx->bufsize);
 	if (n < 0) {
 		if (errno == EAGAIN || errno == EWOULDBLOCK) {
 			SPDK_ERRLOG("spdk_sock_recv() failed, errno %d: %s\n",
@@ -340,7 +351,7 @@ hello_sock_async_cb(void *arg, struct spdk_sock_group *group, struct spdk_sock *
 	}
 
 	client->busy = true;
-	client->iov.iov_len = sizeof(client->buf);
+	client->iov.iov_len = client->ctx->bufsize;
 	client->req.cb_fn = hello_sock_async_readv_cb;
 
 	spdk_sock_readv_async(sock, &client->req);
@@ -367,7 +378,7 @@ hello_sock_accept_client(struct hello_context_t *ctx, struct spdk_sock *sock)
 	client->req.cb_fn = hello_sock_async_readv_cb;
 	client->req.cb_arg = client;
 	client->iov.iov_base = client->buf;
-	client->iov.iov_len = sizeof(client->buf);
+	client->iov.iov_len = ctx->bufsize;
 
 	rc = spdk_sock_group_add_sock(ctx->group, sock, hello_sock_async_cb, client);
 	if (rc != 0) {
@@ -515,7 +526,7 @@ main(int argc, char **argv)
 	opts.name = "hello_sock";
 	opts.shutdown_cb = hello_sock_shutdown_cb;
 
-	if ((rc = spdk_app_parse_args(argc, argv, &opts, "aH:N:P:SVzZ", NULL, hello_sock_parse_arg,
+	if ((rc = spdk_app_parse_args(argc, argv, &opts, "ab:H:N:P:SVzZ", NULL, hello_sock_parse_arg,
 				      hello_sock_usage)) != SPDK_APP_PARSE_ARGS_SUCCESS) {
 		exit(rc);
 	}
@@ -525,6 +536,7 @@ main(int argc, char **argv)
 	hello_context.port = g_port;
 	hello_context.zcopy = g_zcopy;
 	hello_context.verbose = g_verbose;
+	hello_context.bufsize = g_bufsize;
 
 	rc = spdk_app_start(&opts, hello_start, &hello_context);
 	if (rc) {
