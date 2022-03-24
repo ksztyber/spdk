@@ -414,6 +414,13 @@ hello_sock_accept_poll(void *arg)
 				return SPDK_POLLER_IDLE;
 			}
 
+			rc = spdk_sock_set_recvbuf(sock, BUFFER_SIZE);
+			if (rc != 0) {
+				SPDK_ERRLOG("Failed to set the receive buffer size\n");
+				spdk_sock_close(&ctx->sock);
+				return SPDK_POLLER_IDLE;
+			}
+
 			SPDK_NOTICELOG("Accepting a new connection from (%s, %hu) to (%s, %hu)\n",
 				       caddr, cport, saddr, sport);
 
