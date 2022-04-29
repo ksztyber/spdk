@@ -1443,6 +1443,7 @@ nvmf_tcp_qpair_set_recv_state(struct spdk_nvmf_tcp_qpair *tqpair,
 	case NVME_TCP_PDU_RECV_STATE_AWAIT_PDU_CH:
 	case NVME_TCP_PDU_RECV_STATE_AWAIT_PDU_PSH:
 	case NVME_TCP_PDU_RECV_STATE_AWAIT_PDU_PAYLOAD:
+	case NVME_TCP_PDU_RECV_STATE_RECV_PDU_PAYLOAD:
 	case NVME_TCP_PDU_RECV_STATE_ERROR:
 		break;
 	case NVME_TCP_PDU_RECV_STATE_AWAIT_REQ:
@@ -1898,7 +1899,7 @@ nvmf_tcp_pdu_payload_handle(struct spdk_nvmf_tcp_qpair *tqpair,
 	struct spdk_nvmf_tcp_req *tcp_req;
 	struct spdk_nvme_cpl *rsp;
 
-	assert(tqpair->recv_state == NVME_TCP_PDU_RECV_STATE_AWAIT_PDU_PAYLOAD);
+	assert(tqpair->recv_state == NVME_TCP_PDU_RECV_STATE_RECV_PDU_PAYLOAD);
 	pdu = tqpair->pdu_in_progress;
 
 	SPDK_DEBUGLOG(nvmf_tcp, "enter\n");
@@ -2153,13 +2154,50 @@ nvmf_tcp_pdu_payload_insert_dif(struct nvme_tcp_pdu *pdu, uint32_t read_offset,
 	return rc;
 }
 
+static int nvmf_tcp_sock_process(struct spdk_nvmf_tcp_qpair *tqpair);
+
+static void
+nvme_tcp_read_payload_data_cb(void *ctx, int status)
+{
+	struct spdk_nvmf_tcp_qpair *tqpair = ctx;
+	struct nvme_tcp_pdu *pdu = tqpair->pdu_in_progress;
+	struct spdk_nvmf_tcp_transport *ttransport;
+	int rc;
+
+	ttransport = SPDK_CONTAINEROF(tqpair->qpair.transport, struct spdk_nvmf_tcp_transport,
+				      transport);
+
+	spdk_trace_record(TRACE_TCP_READ_FROM_SOCKET_DONE, tqpair->qpair.qid, status, 0, tqpair);
+	if (spdk_unlikely(status <= 0)) {
+		nvmf_tcp_qpair_disconnect(tqpair);
+		return;
+	}
+
+	pdu->rw_offset = status;
+	if (spdk_unlikely(pdu->dif_ctx != NULL)) {
+		rc = nvmf_tcp_pdu_payload_insert_dif(pdu, 0, status);
+		if (rc != 0) {
+			nvmf_tcp_qpair_disconnect(tqpair);
+			return;
+		}
+	}
+
+	/* The socket layer should always receive the full amount we've reqeusted */
+	assert(pdu->rw_offset == pdu->data_len + !!pdu->ddgst_enable * SPDK_NVME_TCP_DIGEST_LEN);
+	nvmf_tcp_pdu_payload_handle(tqpair, ttransport);
+
+	rc = nvmf_tcp_sock_process(tqpair);
+	if (spdk_unlikely(rc < 0)) {
+		nvmf_tcp_qpair_disconnect(tqpair);
+	}
+}
+
 static int
 nvmf_tcp_sock_process(struct spdk_nvmf_tcp_qpair *tqpair)
 {
 	int rc = 0;
 	struct nvme_tcp_pdu *pdu;
 	enum nvme_tcp_pdu_recv_state prev_state;
-	uint32_t data_len;
 	struct spdk_nvmf_tcp_transport *ttransport = SPDK_CONTAINEROF(tqpair->qpair.transport,
 			struct spdk_nvmf_tcp_transport, transport);
 
@@ -2237,36 +2275,17 @@ nvmf_tcp_sock_process(struct spdk_nvmf_tcp_qpair *tqpair)
 				goto out;
 			}
 
-			data_len = pdu->data_len;
 			/* data digest */
 			if (spdk_unlikely((pdu->hdr.common.pdu_type != SPDK_NVME_TCP_PDU_TYPE_H2C_TERM_REQ) &&
 					  tqpair->host_ddgst_enable)) {
-				data_len += SPDK_NVME_TCP_DIGEST_LEN;
 				pdu->ddgst_enable = true;
 			}
 
-			rc = nvme_tcp_read_payload_data(tqpair->sock, pdu);
-			if (rc < 0) {
-				rc = NVME_TCP_PDU_FATAL;
-				goto out;
-			}
-			pdu->rw_offset += rc;
-
-			if (spdk_unlikely(pdu->dif_ctx != NULL)) {
-				rc = nvmf_tcp_pdu_payload_insert_dif(pdu, pdu->rw_offset - rc, rc);
-				if (rc != 0) {
-					rc = NVME_TCP_PDU_FATAL;
-					goto out;
-				}
-			}
-
-			if (pdu->rw_offset < data_len) {
-				rc = NVME_TCP_PDU_IN_PROGRESS;
-				goto out;
-			}
-
-			/* All of this PDU has now been read from the socket. */
-			nvmf_tcp_pdu_payload_handle(tqpair, ttransport);
+			nvmf_tcp_qpair_set_recv_state(tqpair, NVME_TCP_PDU_RECV_STATE_RECV_PDU_PAYLOAD);
+			nvme_tcp_read_payload_data_async(tqpair->sock, pdu,
+							 nvme_tcp_read_payload_data_cb, tqpair);
+			break;
+		case NVME_TCP_PDU_RECV_STATE_RECV_PDU_PAYLOAD:
 			break;
 		case NVME_TCP_PDU_RECV_STATE_ERROR:
 			if (!spdk_sock_is_connected(tqpair->sock)) {

@@ -119,6 +119,9 @@ enum nvme_tcp_pdu_recv_state {
 	/* Active tqpair waiting for payload */
 	NVME_TCP_PDU_RECV_STATE_AWAIT_PDU_PAYLOAD,
 
+	/* Active tqpair in the process of asynchronously receiving PDU payload */
+	NVME_TCP_PDU_RECV_STATE_RECV_PDU_PAYLOAD,
+
 	/* Active tqpair does not wait for payload */
 	NVME_TCP_PDU_RECV_STATE_ERROR,
 };
@@ -439,7 +442,7 @@ nvme_tcp_readv_data(struct spdk_sock *sock, struct iovec *iov, int iovcnt)
 }
 
 
-static int
+static int __attribute__((unused))
 nvme_tcp_read_payload_data(struct spdk_sock *sock, struct nvme_tcp_pdu *pdu)
 {
 	struct iovec iov[NVME_TCP_MAX_SGL_DESCRIPTORS + 1];
@@ -450,6 +453,21 @@ nvme_tcp_read_payload_data(struct spdk_sock *sock, struct nvme_tcp_pdu *pdu)
 	assert(iovcnt >= 0);
 
 	return nvme_tcp_readv_data(sock, iov, iovcnt);
+}
+
+static void __attribute__((unused))
+nvme_tcp_read_payload_data_async(struct spdk_sock *sock, struct nvme_tcp_pdu *pdu,
+				 void (*cb_fn)(void *, int), void *cb_arg)
+{
+	struct spdk_sock_request *req = &pdu->sock_req;
+
+	req->cb_fn = cb_fn;
+	req->cb_arg = cb_arg;
+	req->iovcnt = nvme_tcp_build_payload_iovs(pdu->iov, SPDK_COUNTOF(pdu->iov), pdu,
+			pdu->ddgst_enable, NULL);
+	assert(req->iovcnt >= 0);
+
+	spdk_sock_readv_async(sock, req);
 }
 
 static void
