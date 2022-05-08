@@ -602,7 +602,7 @@ test_nvmf_tcp_h2c_data_hdr_handle(void)
 
 	/* Set qpair state to make unrelated operations NOP */
 	tqpair.state = NVME_TCP_QPAIR_STATE_RUNNING;
-	tqpair.recv_state = NVME_TCP_PDU_RECV_STATE_ERROR;
+	tqpair.recv_state = NVME_TCP_PDU_RECV_STATE_AWAIT_PDU_READY;
 
 	tcp_req.req.iov[0].iov_base = (void *)0xDEADBEEF;
 	tcp_req.req.iov[0].iov_len = 101;
@@ -906,12 +906,15 @@ test_nvmf_tcp_icreq_handle(void)
 	/* case 2: Expect: PASS.  */
 	ttransport.transport.opts.max_io_size = 32;
 	pdu.hdr.ic_req.pfv = 0;
+	tqpair.recv_state = NVME_TCP_PDU_RECV_STATE_AWAIT_PDU_READY;
 	tqpair.host_hdgst_enable = false;
 	tqpair.host_ddgst_enable = false;
 	tqpair.recv_buf_size = 64;
 	pdu.hdr.ic_req.hpda = 16;
 
+	MOCK_SET(spdk_sock_writev, sizeof(struct spdk_nvme_tcp_ic_resp));
 	nvmf_tcp_icreq_handle(&ttransport, &tqpair, &pdu);
+	MOCK_CLEAR(spdk_sock_writev);
 
 	ic_resp = &tqpair.mgmt_pdu->hdr.ic_resp;
 	CU_ASSERT(tqpair.recv_buf_size == MIN_SOCK_PIPE_SIZE);

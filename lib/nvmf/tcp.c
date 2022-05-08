@@ -1423,6 +1423,9 @@ nvmf_tcp_qpair_set_recv_state(struct spdk_nvmf_tcp_qpair *tqpair,
 		return;
 	}
 
+	/* Once a qpair is put in error state, it should never leave it */
+	assert(tqpair->recv_state != NVME_TCP_PDU_RECV_STATE_ERROR);
+
 	if (tqpair->recv_state == NVME_TCP_PDU_RECV_STATE_AWAIT_REQ) {
 		/* When leaving the await req state, move the qpair to the main list */
 		TAILQ_REMOVE(&tqpair->group->await_req, tqpair, link);
@@ -1439,12 +1442,12 @@ nvmf_tcp_qpair_set_recv_state(struct spdk_nvmf_tcp_qpair *tqpair,
 	case NVME_TCP_PDU_RECV_STATE_AWAIT_PDU_CH:
 	case NVME_TCP_PDU_RECV_STATE_AWAIT_PDU_PSH:
 	case NVME_TCP_PDU_RECV_STATE_AWAIT_PDU_PAYLOAD:
+	case NVME_TCP_PDU_RECV_STATE_ERROR:
 		break;
 	case NVME_TCP_PDU_RECV_STATE_AWAIT_REQ:
 		TAILQ_REMOVE(&tqpair->group->qpairs, tqpair, link);
 		TAILQ_INSERT_TAIL(&tqpair->group->await_req, tqpair, link);
 		break;
-	case NVME_TCP_PDU_RECV_STATE_ERROR:
 	case NVME_TCP_PDU_RECV_STATE_AWAIT_PDU_READY:
 		memset(tqpair->pdu_in_progress, 0, sizeof(*(tqpair->pdu_in_progress)));
 		break;
@@ -2764,10 +2767,9 @@ nvmf_tcp_req_process(struct spdk_nvmf_tcp_transport *ttransport,
 			rc = nvmf_tcp_req_parse_sgl(tcp_req, transport, group);
 			if (rc < 0) {
 				STAILQ_REMOVE_HEAD(&group->pending_buf_queue, buf_link);
-				/* Reset the tqpair receiving pdu state */
-				nvmf_tcp_qpair_set_recv_state(tqpair, NVME_TCP_PDU_RECV_STATE_ERROR);
 				nvmf_tcp_req_set_state(tcp_req, TCP_REQUEST_STATE_READY_TO_COMPLETE);
 				tcp_req->req.rsp->nvme_cpl.cid = tcp_req->req.cmd->nvme_cmd.cid;
+				/* Reset the tqpair receiving pdu state */
 				nvmf_tcp_qpair_set_recv_state(tqpair, NVME_TCP_PDU_RECV_STATE_AWAIT_PDU_READY);
 				break;
 			}
