@@ -39,6 +39,7 @@
 #include <liburing.h>
 
 #include "spdk/barrier.h"
+#include "spdk/bit_array.h"
 #include "spdk/env.h"
 #include "spdk/log.h"
 #include "spdk/pipe.h"
@@ -54,6 +55,7 @@
 #define PORTNUMLEN 32
 #define SPDK_SOCK_GROUP_QUEUE_DEPTH 4096
 #define SPDK_SOCK_CMG_INFO_SIZE (sizeof(struct cmsghdr) + sizeof(struct sock_extended_err))
+#define SPDK_SOCK_MAX_SOCKS_IN_GROUP 4096
 
 enum spdk_sock_task_type {
 	SPDK_SOCK_TASK_POLLIN = 0,
@@ -86,6 +88,7 @@ struct spdk_uring_task {
 struct spdk_uring_sock {
 	struct spdk_sock			base;
 	int					fd;
+	int					idx;
 	uint32_t				sendmsg_idx;
 	struct spdk_uring_sock_group_impl	*group;
 	struct spdk_uring_task			write_task;
@@ -113,6 +116,7 @@ struct spdk_uring_sock_group_impl {
 	uint32_t				io_queued;
 	uint32_t				io_avail;
 	struct pending_recv_list		pending_recv;
+	struct spdk_bit_array			*idx_array;
 };
 
 static struct spdk_sock_impl_opts g_spdk_uring_sock_impl_opts = {
@@ -922,7 +926,8 @@ _sock_prep_recv(struct spdk_sock *_sock)
 	sock->group->io_queued++;
 
 	sqe = io_uring_get_sqe(&sock->group->uring);
-	io_uring_prep_recvmsg(sqe, sock->fd, &task->msg, MSG_ERRQUEUE);
+	io_uring_prep_recvmsg(sqe, sock->idx, &task->msg, MSG_ERRQUEUE);
+	io_uring_sqe_set_flags(sqe, IOSQE_FIXED_FILE);
 	io_uring_sqe_set_data(sqe, task);
 	task->status = SPDK_URING_SOCK_TASK_IN_PROCESS;
 }
@@ -966,7 +971,8 @@ _sock_flush(struct spdk_sock *_sock)
 	sock->group->io_queued++;
 
 	sqe = io_uring_get_sqe(&sock->group->uring);
-	io_uring_prep_sendmsg(sqe, sock->fd, &sock->write_task.msg, flags);
+	io_uring_prep_sendmsg(sqe, sock->idx, &sock->write_task.msg, flags);
+	io_uring_sqe_set_flags(sqe, IOSQE_FIXED_FILE);
 	io_uring_sqe_set_data(sqe, task);
 	task->status = SPDK_URING_SOCK_TASK_IN_PROCESS;
 }
@@ -987,7 +993,8 @@ _sock_prep_pollin(struct spdk_sock *_sock)
 	sock->group->io_queued++;
 
 	sqe = io_uring_get_sqe(&sock->group->uring);
-	io_uring_prep_poll_add(sqe, sock->fd, POLLIN | POLLERR);
+	io_uring_prep_poll_add(sqe, sock->idx, POLLIN | POLLERR);
+	io_uring_sqe_set_flags(sqe, IOSQE_FIXED_FILE);
 	io_uring_sqe_set_data(sqe, task);
 	task->status = SPDK_URING_SOCK_TASK_IN_PROCESS;
 }
@@ -1343,6 +1350,8 @@ static struct spdk_sock_group_impl *
 uring_sock_group_impl_create(void)
 {
 	struct spdk_uring_sock_group_impl *group_impl;
+	int rc, fds[SPDK_SOCK_MAX_SOCKS_IN_GROUP];
+	unsigned idx;
 
 	group_impl = calloc(1, sizeof(*group_impl));
 	if (group_impl == NULL) {
@@ -1350,10 +1359,31 @@ uring_sock_group_impl_create(void)
 		return NULL;
 	}
 
+	group_impl->idx_array = spdk_bit_array_create(SPDK_SOCK_MAX_SOCKS_IN_GROUP);
+	if (group_impl->idx_array == NULL) {
+		SPDK_ERRLOG("failed to allocate bit array\n");
+		free(group_impl);
+		return NULL;
+	}
+
 	group_impl->io_avail = SPDK_SOCK_GROUP_QUEUE_DEPTH;
 
 	if (io_uring_queue_init(SPDK_SOCK_GROUP_QUEUE_DEPTH, &group_impl->uring, 0) < 0) {
 		SPDK_ERRLOG("uring I/O context setup failure\n");
+		spdk_bit_array_free(&group_impl->idx_array);
+		free(group_impl);
+		return NULL;
+	}
+
+	for (idx = 0; idx < SPDK_COUNTOF(fds); ++idx) {
+		fds[idx] = -1;
+	}
+
+	rc = io_uring_register_files(&group_impl->uring, fds, SPDK_COUNTOF(fds));
+	if (rc != 0) {
+		SPDK_ERRLOG("failed to register uring file array\n");
+		io_uring_queue_exit(&group_impl->uring);
+		spdk_bit_array_free(&group_impl->idx_array);
 		free(group_impl);
 		return NULL;
 	}
@@ -1373,9 +1403,25 @@ uring_sock_group_impl_add_sock(struct spdk_sock_group_impl *_group,
 {
 	struct spdk_uring_sock *sock = __uring_sock(_sock);
 	struct spdk_uring_sock_group_impl *group = __uring_group_impl(_group);
+	uint32_t idx;
 	int rc;
 
+	idx = spdk_bit_array_find_first_clear(group->idx_array, 0);
+	if (idx == UINT32_MAX) {
+		SPDK_ERRLOG("Failed to find an empty sock idx\n");
+		return -1;
+	}
+
+	rc = io_uring_register_files_update(&group->uring, idx, &sock->fd, 1);
+	if (rc != 1) {
+		SPDK_ERRLOG("Failed to update sock_group's file array: %d, %d\n", rc, errno);
+		return -1;
+	}
+
+	spdk_bit_array_set(group->idx_array, idx);
+
 	sock->group = group;
+	sock->idx = (int)idx;
 	sock->write_task.sock = sock;
 	sock->write_task.type = SPDK_SOCK_TASK_WRITE;
 
@@ -1460,6 +1506,7 @@ uring_sock_group_impl_remove_sock(struct spdk_sock_group_impl *_group,
 {
 	struct spdk_uring_sock *sock = __uring_sock(_sock);
 	struct spdk_uring_sock_group_impl *group = __uring_group_impl(_group);
+	int rc, fd = -1;
 
 	if (sock->write_task.status != SPDK_URING_SOCK_TASK_NOT_IN_USE) {
 		_sock_prep_cancel_task(_sock, &sock->write_task);
@@ -1496,6 +1543,15 @@ uring_sock_group_impl_remove_sock(struct spdk_sock_group_impl *_group,
 	assert(sock->pollin_task.status == SPDK_URING_SOCK_TASK_NOT_IN_USE);
 	assert(sock->recv_task.status == SPDK_URING_SOCK_TASK_NOT_IN_USE);
 
+	rc = io_uring_register_files_update(&group->uring, (unsigned)sock->idx, &fd, 1);
+	if (rc != 1) {
+		SPDK_ERRLOG("Failed to update file array: %d, %d\n", rc, errno);
+		return -1;
+	}
+
+	assert(spdk_bit_array_get(group->idx_array, (uint32_t)sock->idx));
+	spdk_bit_array_clear(group->idx_array, (uint32_t)sock->idx);
+
 	if (sock->pending_recv) {
 		TAILQ_REMOVE(&group->pending_recv, sock, link);
 		sock->pending_recv = false;
@@ -1528,6 +1584,7 @@ uring_sock_group_impl_close(struct spdk_sock_group_impl *_group)
 		spdk_sock_map_release(&g_map, spdk_env_get_current_core());
 	}
 
+	spdk_bit_array_free(&group->idx_array);
 	free(group);
 	return 0;
 }
