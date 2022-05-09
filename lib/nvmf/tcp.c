@@ -254,6 +254,7 @@ struct spdk_nvmf_tcp_qpair {
 
 	bool					host_hdgst_enable;
 	bool					host_ddgst_enable;
+	bool					in_sock_process;
 
 	/* This is a spare PDU used for sending special management
 	 * operations. Primarily, this is used for the initial
@@ -2162,6 +2163,11 @@ nvmf_tcp_sock_process(struct spdk_nvmf_tcp_qpair *tqpair)
 	struct spdk_nvmf_tcp_transport *ttransport = SPDK_CONTAINEROF(tqpair->qpair.transport,
 			struct spdk_nvmf_tcp_transport, transport);
 
+	if (tqpair->in_sock_process) {
+		return 0;
+	}
+	tqpair->in_sock_process = true;
+
 	/* The loop here is to allow for several back-to-back state changes. */
 	do {
 		prev_state = tqpair->recv_state;
@@ -2173,7 +2179,7 @@ nvmf_tcp_sock_process(struct spdk_nvmf_tcp_qpair *tqpair)
 		case NVME_TCP_PDU_RECV_STATE_AWAIT_PDU_READY:
 		case NVME_TCP_PDU_RECV_STATE_AWAIT_PDU_CH:
 			if (spdk_unlikely(tqpair->state == NVME_TCP_QPAIR_STATE_INITIALIZING)) {
-				return rc;
+				goto out;
 			}
 
 			rc = nvme_tcp_read_data(tqpair->sock,
@@ -2181,7 +2187,8 @@ nvmf_tcp_sock_process(struct spdk_nvmf_tcp_qpair *tqpair)
 						(void *)&pdu->hdr.common + pdu->ch_valid_bytes);
 			if (rc < 0) {
 				SPDK_DEBUGLOG(nvmf_tcp, "will disconnect tqpair=%p\n", tqpair);
-				return NVME_TCP_PDU_FATAL;
+				rc = NVME_TCP_PDU_FATAL;
+				goto out;
 			} else if (rc > 0) {
 				pdu->ch_valid_bytes += rc;
 				spdk_trace_record(TRACE_TCP_READ_FROM_SOCKET_DONE, tqpair->qpair.qid, rc, 0, tqpair);
@@ -2191,7 +2198,8 @@ nvmf_tcp_sock_process(struct spdk_nvmf_tcp_qpair *tqpair)
 			}
 
 			if (pdu->ch_valid_bytes < sizeof(struct spdk_nvme_tcp_common_pdu_hdr)) {
-				return NVME_TCP_PDU_IN_PROGRESS;
+				rc = NVME_TCP_PDU_IN_PROGRESS;
+				goto out;
 			}
 
 			/* The command header of this PDU has now been read from the socket. */
@@ -2203,14 +2211,16 @@ nvmf_tcp_sock_process(struct spdk_nvmf_tcp_qpair *tqpair)
 						pdu->psh_len - pdu->psh_valid_bytes,
 						(void *)&pdu->hdr.raw + sizeof(struct spdk_nvme_tcp_common_pdu_hdr) + pdu->psh_valid_bytes);
 			if (rc < 0) {
-				return NVME_TCP_PDU_FATAL;
+				rc = NVME_TCP_PDU_FATAL;
+				goto out;
 			} else if (rc > 0) {
 				spdk_trace_record(TRACE_TCP_READ_FROM_SOCKET_DONE, tqpair->qpair.qid, rc, 0, tqpair);
 				pdu->psh_valid_bytes += rc;
 			}
 
 			if (pdu->psh_valid_bytes < pdu->psh_len) {
-				return NVME_TCP_PDU_IN_PROGRESS;
+				rc = NVME_TCP_PDU_IN_PROGRESS;
+				goto out;
 			}
 
 			/* All header(ch, psh, head digist) of this PDU has now been read from the socket. */
@@ -2223,7 +2233,8 @@ nvmf_tcp_sock_process(struct spdk_nvmf_tcp_qpair *tqpair)
 		case NVME_TCP_PDU_RECV_STATE_AWAIT_PDU_PAYLOAD:
 			/* check whether the data is valid, if not we just return */
 			if (!pdu->data_len) {
-				return NVME_TCP_PDU_IN_PROGRESS;
+				rc = NVME_TCP_PDU_IN_PROGRESS;
+				goto out;
 			}
 
 			data_len = pdu->data_len;
@@ -2236,19 +2247,22 @@ nvmf_tcp_sock_process(struct spdk_nvmf_tcp_qpair *tqpair)
 
 			rc = nvme_tcp_read_payload_data(tqpair->sock, pdu);
 			if (rc < 0) {
-				return NVME_TCP_PDU_FATAL;
+				rc = NVME_TCP_PDU_FATAL;
+				goto out;
 			}
 			pdu->rw_offset += rc;
 
 			if (spdk_unlikely(pdu->dif_ctx != NULL)) {
 				rc = nvmf_tcp_pdu_payload_insert_dif(pdu, pdu->rw_offset - rc, rc);
 				if (rc != 0) {
-					return NVME_TCP_PDU_FATAL;
+					rc = NVME_TCP_PDU_FATAL;
+					goto out;
 				}
 			}
 
 			if (pdu->rw_offset < data_len) {
-				return NVME_TCP_PDU_IN_PROGRESS;
+				rc = NVME_TCP_PDU_IN_PROGRESS;
+				goto out;
 			}
 
 			/* All of this PDU has now been read from the socket. */
@@ -2256,7 +2270,8 @@ nvmf_tcp_sock_process(struct spdk_nvmf_tcp_qpair *tqpair)
 			break;
 		case NVME_TCP_PDU_RECV_STATE_ERROR:
 			if (!spdk_sock_is_connected(tqpair->sock)) {
-				return NVME_TCP_PDU_FATAL;
+				rc = NVME_TCP_PDU_FATAL;
+				goto out;
 			}
 			break;
 		default:
@@ -2265,7 +2280,8 @@ nvmf_tcp_sock_process(struct spdk_nvmf_tcp_qpair *tqpair)
 			break;
 		}
 	} while (tqpair->recv_state != prev_state);
-
+out:
+	tqpair->in_sock_process = false;
 	return rc;
 }
 
