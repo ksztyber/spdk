@@ -27,10 +27,15 @@ class StorageManagementAgent(pb2_grpc.StorageManagementAgentServicer):
         self._devices[device_manager.protocol] = device_manager
 
     def start(self):
+        self._volume_mgr.start()
         self._server.start()
 
     def stop(self):
         self._server.stop(None)
+        self._volume_mgr.stop()
+
+    def set_volume_cleanup_period(self, period):
+        self._volume_mgr.set_volume_cleanup_period(period)
 
     def _find_device_by_name(self, name):
         return self._devices.get(name)

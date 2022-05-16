@@ -118,6 +118,10 @@ if __name__ == '__main__':
 
     agent = sma.StorageManagementAgent(config['address'], config['port'], client)
 
+    period = config.get('volume_cleanup_period')
+    if period is not None:
+        agent.set_volume_cleanup_period(period)
+
     devices = [sma.NvmfTcpDeviceManager(client)]
     devices += load_plugins(config.get('plugins') or [], client)
     devices += load_plugins(filter(None, os.environ.get('SMA_PLUGINS', '').split(':')),
