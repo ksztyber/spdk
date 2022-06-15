@@ -32,6 +32,7 @@ enum spdk_sock_task_type {
 	SPDK_SOCK_TASK_ERRQUEUE,
 	SPDK_SOCK_TASK_WRITE,
 	SPDK_SOCK_TASK_READ,
+	SPDK_SOCK_TASK_PIPE,
 	SPDK_SOCK_TASK_CANCEL,
 };
 
@@ -66,6 +67,7 @@ struct spdk_uring_sock {
 	struct spdk_uring_task			pollin_task;
 	struct spdk_uring_task			cancel_task;
 	struct spdk_uring_task			read_task;
+	struct spdk_uring_task			pipe_task;
 	struct spdk_pipe			*recv_pipe;
 	void					*recv_buf;
 	int					recv_buf_sz;
@@ -1050,12 +1052,14 @@ _sock_prep_pollin(struct spdk_sock *_sock)
 	struct spdk_uring_sock *sock = __uring_sock(_sock);
 	struct spdk_uring_task *task = &sock->pollin_task;
 	struct spdk_uring_task *read_task = &sock->read_task;
+	struct spdk_uring_task *pipe_task = &sock->pipe_task;
 	struct io_uring_sqe *sqe;
 
 	/* Do not prepare pollin event */
 	if (task->status == SPDK_URING_SOCK_TASK_IN_PROCESS ||
 	    (!sock->zcopy && (sock->pending_recv ||
-			      read_task->status == SPDK_URING_SOCK_TASK_IN_PROCESS))) {
+			      read_task->status == SPDK_URING_SOCK_TASK_IN_PROCESS ||
+			      pipe_task->status == SPDK_URING_SOCK_TASK_IN_PROCESS))) {
 		return;
 	}
 
@@ -1089,49 +1093,56 @@ _sock_prep_cancel_task(struct spdk_sock *_sock, void *user_data)
 }
 
 static void
-_sock_prep_read_task(struct spdk_uring_sock *sock)
+_sock_prep_read_task(struct spdk_uring_sock *sock, struct spdk_uring_task *task,
+		     struct iovec *iovs, size_t iovcnt, unsigned flags)
 {
-	struct spdk_uring_task *task = &sock->read_task;
-	struct spdk_sock_request *req = sock->base.read_req;
 	struct io_uring_sqe *sqe;
-	unsigned flags = 0;
-	int bytes, iovcnt;
-
-	if (task->status != SPDK_URING_SOCK_TASK_NOT_IN_USE) {
-		return;
-	}
-
-	assert(sock->group != NULL);
-	assert(task->last_req == NULL);
-
-	if (req != NULL) {
-		/* If there's an oustanding user request, the pipe must be empty */
-		assert(!sock->recv_pipe || spdk_pipe_reader_bytes_available(sock->recv_pipe) == 0);
-
-		iovcnt = spdk_sock_prep_req(req, task->iovs, 0, NULL);
-		assert(iovcnt > 0);
-
-		/* We want to wait until the whole user buffer is received */
-		flags = MSG_WAITALL;
-		task->last_req = req;
-	} else if (sock->recv_pipe != NULL) {
-		bytes = spdk_pipe_writer_get_buffer(sock->recv_pipe, sock->recv_buf_sz, task->iovs);
-		if (bytes <= 0) {
-			return;
-		}
-		iovcnt = 2;
-	} else {
-		return;
-	}
 
 	sock->group->io_queued++;
-	task->msg.msg_iov = task->iovs;
+	task->msg.msg_iov = iovs;
 	task->msg.msg_iovlen = iovcnt;
 
 	sqe = io_uring_get_sqe(&sock->group->uring);
 	io_uring_prep_recvmsg(sqe, sock->fd, &task->msg, flags);
 	io_uring_sqe_set_data(sqe, task);
 	task->status = SPDK_URING_SOCK_TASK_IN_PROCESS;
+}
+
+static void
+_sock_prep_read_tasks(struct spdk_uring_sock *sock)
+{
+	struct spdk_uring_task *rtask = &sock->read_task;
+	struct spdk_uring_task *ptask = &sock->pipe_task;
+	struct spdk_sock_request *req = sock->base.read_req;
+	int bytes, iovcnt;
+
+	if (rtask->status != SPDK_URING_SOCK_TASK_NOT_IN_USE ||
+	    ptask->status != SPDK_URING_SOCK_TASK_NOT_IN_USE) {
+		return;
+	}
+
+	assert(sock->group != NULL);
+
+	/* First prepare the task to read the data directly to user buffers */
+	if (req != NULL) {
+		/* If there's an oustanding user request, the pipe must be empty */
+		assert(!sock->recv_pipe || spdk_pipe_reader_bytes_available(sock->recv_pipe) == 0);
+
+		iovcnt = spdk_sock_prep_req(req, rtask->iovs, 0, NULL);
+		assert(iovcnt > 0);
+
+		/* We want to wait until the whole user buffer is received */
+		_sock_prep_read_task(sock, rtask, rtask->iovs, iovcnt, MSG_WAITALL);
+	}
+
+	/* Then prepare a task to read data to the pipe.  We can submit to read tasks at the same
+	 * time, becuase the first one's using the MSG_WAITALL flag. */
+	if (sock->recv_pipe != NULL) {
+		bytes = spdk_pipe_writer_get_buffer(sock->recv_pipe, sock->recv_buf_sz, ptask->iovs);
+		if (bytes > 0) {
+			_sock_prep_read_task(sock, ptask, ptask->iovs, 2, 0);
+		}
+	}
 }
 
 static int
@@ -1213,6 +1224,11 @@ sock_uring_group_reap(struct spdk_uring_sock_group_impl *group, int max, int max
 			/* Do nothing */
 			break;
 		case SPDK_SOCK_TASK_READ:
+			assert(sock->base.read_req != NULL);
+			sock_complete_read_req(&sock->base, status);
+			break;
+#if 0
+			/* TODO: remove last_req from here, as we know read task uses async reqs */
 			if (task->last_req != NULL) {
 				/* We're reading directly to user's buffers */
 				assert(task->last_req == sock->base.read_req);
@@ -1221,6 +1237,23 @@ sock_uring_group_reap(struct spdk_uring_sock_group_impl *group, int max, int max
 			} else if (spdk_likely(status > 0)) {
 				/* Otherwise we were reading to the pipe */
 				sock_complete_pipe_read(sock, status);
+			} else {
+				/* Put the request on the pending_recv list to notify the
+				 * user that the connection has been closed */
+				if (!sock->pending_recv) {
+					sock->pending_recv = true;
+					TAILQ_INSERT_TAIL(&group->pending_recv, sock, link);
+				}
+				/* Zero means that the peer has performed an orderly shutdown */
+				sock->connection_status = status != 0 ? status : -ENOTCONN;
+			}
+#endif
+			break;
+		case SPDK_SOCK_TASK_PIPE:
+			if (spdk_likely(status > 0)) {
+				sock_complete_pipe_read(sock, status);
+			} else if (sock->base.read_req != NULL) {
+				sock_complete_read_req(&sock->base, status);
 			} else {
 				/* Put the request on the pending_recv list to notify the
 				 * user that the connection has been closed */
@@ -1411,7 +1444,7 @@ uring_sock_readv_async(struct spdk_sock *_sock, struct spdk_sock_request *req)
 		}
 	}
 
-	_sock_prep_read_task(sock);
+	_sock_prep_read_tasks(sock);
 }
 
 static int
@@ -1564,6 +1597,9 @@ uring_sock_group_impl_add_sock(struct spdk_sock_group_impl *_group,
 	sock->read_task.sock = sock;
 	sock->read_task.type = SPDK_SOCK_TASK_READ;
 
+	sock->pipe_task.sock = sock;
+	sock->pipe_task.type = SPDK_SOCK_TASK_PIPE;
+
 	/* switched from another polling group due to scheduling */
 	if (spdk_unlikely(sock->recv_pipe != NULL &&
 			  (spdk_pipe_reader_bytes_available(sock->recv_pipe) > 0))) {
@@ -1600,7 +1636,7 @@ uring_sock_group_impl_poll(struct spdk_sock_group_impl *_group, int max_events,
 				continue;
 			}
 			_sock_flush(_sock);
-			_sock_prep_read_task(sock);
+			_sock_prep_read_tasks(sock);
 			_sock_prep_pollin(_sock);
 		}
 	}
@@ -1674,11 +1710,20 @@ uring_sock_group_impl_remove_sock(struct spdk_sock_group_impl *_group,
 		}
 	}
 
+	if (sock->pipe_task.status != SPDK_URING_SOCK_TASK_NOT_IN_USE) {
+		_sock_prep_cancel_task(_sock, &sock->pipe_task);
+		while ((sock->pipe_task.status != SPDK_URING_SOCK_TASK_NOT_IN_USE) ||
+		       (sock->cancel_task.status != SPDK_URING_SOCK_TASK_NOT_IN_USE)) {
+			uring_sock_group_impl_poll(_group, 32, NULL);
+		}
+	}
+
 	/* Make sure the cancelling the tasks above didn't cause sending new requests */
 	assert(sock->write_task.status == SPDK_URING_SOCK_TASK_NOT_IN_USE);
 	assert(sock->pollin_task.status == SPDK_URING_SOCK_TASK_NOT_IN_USE);
 	assert(sock->errqueue_task.status == SPDK_URING_SOCK_TASK_NOT_IN_USE);
 	assert(sock->read_task.status == SPDK_URING_SOCK_TASK_NOT_IN_USE);
+	assert(sock->pipe_task.status == SPDK_URING_SOCK_TASK_NOT_IN_USE);
 
 	if (sock->pending_recv) {
 		TAILQ_REMOVE(&group->pending_recv, sock, link);
