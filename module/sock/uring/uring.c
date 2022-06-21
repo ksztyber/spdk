@@ -1094,7 +1094,7 @@ _sock_prep_cancel_task(struct spdk_sock *_sock, void *user_data)
 
 static void
 _sock_prep_read_task(struct spdk_uring_sock *sock, struct spdk_uring_task *task,
-		     struct iovec *iovs, size_t iovcnt, unsigned flags)
+		     struct iovec *iovs, size_t iovcnt, unsigned flags, unsigned sqflags)
 {
 	struct io_uring_sqe *sqe;
 
@@ -1104,6 +1104,7 @@ _sock_prep_read_task(struct spdk_uring_sock *sock, struct spdk_uring_task *task,
 
 	sqe = io_uring_get_sqe(&sock->group->uring);
 	io_uring_prep_recvmsg(sqe, sock->fd, &task->msg, flags);
+	io_uring_sqe_set_flags(sqe, sqflags);
 	io_uring_sqe_set_data(sqe, task);
 	task->status = SPDK_URING_SOCK_TASK_IN_PROCESS;
 }
@@ -1114,7 +1115,7 @@ _sock_prep_read_tasks(struct spdk_uring_sock *sock)
 	struct spdk_uring_task *rtask = &sock->read_task;
 	struct spdk_uring_task *ptask = &sock->pipe_task;
 	struct spdk_sock_request *req = sock->base.read_req;
-	int bytes, iovcnt;
+	int bytes = 0, iovcnt;
 
 	if (rtask->status != SPDK_URING_SOCK_TASK_NOT_IN_USE ||
 	    ptask->status != SPDK_URING_SOCK_TASK_NOT_IN_USE) {
@@ -1122,6 +1123,10 @@ _sock_prep_read_tasks(struct spdk_uring_sock *sock)
 	}
 
 	assert(sock->group != NULL);
+
+	if (sock->recv_pipe != NULL) {
+		bytes = spdk_pipe_writer_get_buffer(sock->recv_pipe, sock->recv_buf_sz, ptask->iovs);
+	}
 
 	/* First prepare the task to read the data directly to user buffers */
 	if (req != NULL) {
@@ -1132,16 +1137,12 @@ _sock_prep_read_tasks(struct spdk_uring_sock *sock)
 		assert(iovcnt > 0);
 
 		/* We want to wait until the whole user buffer is received */
-		_sock_prep_read_task(sock, rtask, rtask->iovs, iovcnt, MSG_WAITALL);
+		_sock_prep_read_task(sock, rtask, rtask->iovs, iovcnt, MSG_WAITALL,
+				     bytes > 0 ? IOSQE_IO_LINK : 0);
 	}
 
-	/* Then prepare a task to read data to the pipe.  We can submit to read tasks at the same
-	 * time, becuase the first one's using the MSG_WAITALL flag. */
-	if (sock->recv_pipe != NULL) {
-		bytes = spdk_pipe_writer_get_buffer(sock->recv_pipe, sock->recv_buf_sz, ptask->iovs);
-		if (bytes > 0) {
-			_sock_prep_read_task(sock, ptask, ptask->iovs, 2, 0);
-		}
+	if (bytes > 0 ){
+		_sock_prep_read_task(sock, ptask, ptask->iovs, 2, 0, 0);
 	}
 }
 
@@ -1227,29 +1228,8 @@ sock_uring_group_reap(struct spdk_uring_sock_group_impl *group, int max, int max
 			assert(sock->base.read_req != NULL);
 			sock_complete_read_req(&sock->base, status);
 			break;
-#if 0
-			/* TODO: remove last_req from here, as we know read task uses async reqs */
-			if (task->last_req != NULL) {
-				/* We're reading directly to user's buffers */
-				assert(task->last_req == sock->base.read_req);
-				task->last_req = NULL;
-				sock_complete_read_req(&sock->base, status);
-			} else if (spdk_likely(status > 0)) {
-				/* Otherwise we were reading to the pipe */
-				sock_complete_pipe_read(sock, status);
-			} else {
-				/* Put the request on the pending_recv list to notify the
-				 * user that the connection has been closed */
-				if (!sock->pending_recv) {
-					sock->pending_recv = true;
-					TAILQ_INSERT_TAIL(&group->pending_recv, sock, link);
-				}
-				/* Zero means that the peer has performed an orderly shutdown */
-				sock->connection_status = status != 0 ? status : -ENOTCONN;
-			}
-#endif
-			break;
 		case SPDK_SOCK_TASK_PIPE:
+			assert(sock->read_task.status == SPDK_URING_SOCK_TASK_NOT_IN_USE);
 			if (spdk_likely(status > 0)) {
 				sock_complete_pipe_read(sock, status);
 			} else if (sock->base.read_req != NULL) {
