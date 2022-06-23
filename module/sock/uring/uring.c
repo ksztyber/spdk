@@ -57,6 +57,12 @@ struct spdk_uring_task {
 	STAILQ_ENTRY(spdk_uring_task)		link;
 };
 
+enum URING_SOCK_STATS {
+	URING_SOCK_STATS_BYTES_PIPE,
+	URING_SOCK_STATS_BYTES_DIRECT,
+	URING_SOCK_STATS_MAX
+};
+
 struct spdk_uring_sock {
 	struct spdk_sock			base;
 	int					fd;
@@ -77,6 +83,7 @@ struct spdk_uring_sock {
 	int					connection_status;
 	int					placement_id;
 	uint8_t					buf[SPDK_SOCK_CMG_INFO_SIZE];
+	uint64_t				stats[URING_SOCK_STATS_MAX];
 	TAILQ_ENTRY(spdk_uring_sock)		link;
 };
 
@@ -619,6 +626,10 @@ uring_sock_close(struct spdk_sock *_sock)
 {
 	struct spdk_uring_sock *sock = __uring_sock(_sock);
 
+       SPDK_NOTICELOG("stats: direct=%"PRIu64", pipe=%"PRIu64"\n",
+                      sock->stats[URING_SOCK_STATS_BYTES_DIRECT],
+                      sock->stats[URING_SOCK_STATS_BYTES_PIPE]);
+
 	assert(TAILQ_EMPTY(&_sock->pending_reqs));
 	assert(sock->group == NULL);
 
@@ -900,6 +911,8 @@ sock_complete_pipe_read(struct spdk_uring_sock *sock, ssize_t rc)
 	struct spdk_uring_sock_group_impl *group;
 	struct iovec iov[IOV_BATCH_SIZE];
 	int iovcnt;
+
+	sock->stats[URING_SOCK_STATS_BYTES_PIPE] += rc;
 
 	assert(sock->recv_pipe != NULL);
 
@@ -1235,6 +1248,9 @@ sock_uring_group_reap(struct spdk_uring_sock_group_impl *group, int max, int max
 			break;
 		case SPDK_SOCK_TASK_READ:
 			assert(sock->base.read_req != NULL);
+			if (status > 0) {
+				sock->stats[URING_SOCK_STATS_BYTES_DIRECT] += status;
+			}
 			sock_complete_read_req(&sock->base, status);
 			break;
 		case SPDK_SOCK_TASK_PIPE:
