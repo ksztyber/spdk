@@ -877,6 +877,8 @@ sock_complete_read_req(struct spdk_sock *_sock, ssize_t rc)
 	if (spdk_likely(rc > 0)) {
 		rc = sock_request_advance_offset(req, rc);
 		if (rc < 0) {
+			struct spdk_uring_sock *sock = __uring_sock(_sock);
+			assert(spdk_pipe_reader_bytes_available(sock->recv_pipe) == 0);
 			/* Read portion of req's data, waiting for the rest */
 			return false;
 		}
@@ -900,6 +902,7 @@ sock_complete_pipe_read(struct spdk_uring_sock *sock, ssize_t rc)
 	int iovcnt;
 
 	assert(sock->recv_pipe != NULL);
+
 	spdk_pipe_writer_advance(sock->recv_pipe, rc);
 
 	if (!sock->pending_recv) {
@@ -1137,7 +1140,13 @@ _sock_prep_read_tasks(struct spdk_uring_sock *sock)
 		assert(iovcnt > 0);
 
 		/* We want to wait until the whole user buffer is received */
-		_sock_prep_read_task(sock, rtask, rtask->iovs, iovcnt, MSG_WAITALL,
+
+		_sock_prep_read_task(sock, rtask, rtask->iovs, iovcnt,
+#if 0
+				     MSG_WAITALL,
+#else
+				     0,
+#endif
 				     bytes > 0 ? IOSQE_IO_LINK : 0);
 	}
 
