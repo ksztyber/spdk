@@ -1403,6 +1403,23 @@ spdk_vmd_hotplug_monitor(void)
 }
 
 int
+spdk_vmd_remove_device(struct spdk_pci_device *pci_device)
+{
+	struct vmd_pci_device *device;
+
+	device = vmd_find_device(&pci_device->addr);
+	if (spdk_unlikely(device == NULL)) {
+		return -EINVAL;
+	}
+
+	assert(strcmp(spdk_pci_device_get_type(pci_device), "vmd") == 0);
+
+	vmd_remove_device(device);
+
+	return 0;
+}
+
+int
 spdk_vmd_init(void)
 {
 	return spdk_pci_enumerate(spdk_pci_vmd_get_driver(), vmd_enum_cb, &g_vmd_container);
