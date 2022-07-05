@@ -21,6 +21,9 @@ Calculate num_md_pages from num_md_pages_per_cluster_ratio, and pass it to spdk_
 
 New options `ktls` and `tls_version` were added to the `spdk_sock_opts` structure.
 
+Renamed `enable_vmd` RPC to `vmd_enable` to make it consistent with our naming scheme of
+`<subsystem>_<action>`.  For now, the old name is still available, but is marked as deprecated.
+
 ## v22.05
 
 ### sock

@@ -9597,7 +9597,7 @@ Example response:
 }
 ~~~
 
-### enable_vmd {#rpc_enable_vmd}
+### vmd_enable {#rpc_enable_vmd}
 
 Enable VMD enumeration.
 
@@ -9616,7 +9616,7 @@ Example request:
 ~~~json
 {
   "jsonrpc": "2.0",
-  "method": "enable_vmd",
+  "method": "vmd_enable",
   "id": 1
 }
 ~~~
