@@ -1420,6 +1420,24 @@ spdk_vmd_remove_device(struct spdk_pci_device *pci_device)
 }
 
 int
+spdk_vmd_rescan(void)
+{
+	struct vmd_pci_bus *bus;
+	uint32_t i;
+	int rc = 0;
+
+	for (i = 0; i < g_vmd_container.count; ++i) {
+		TAILQ_FOREACH(bus, &g_vmd_container.vmd[i].bus_list, tailq) {
+			if (bus->self != NULL) {
+				rc += vmd_scan_single_bus(bus, bus->self);
+			}
+		}
+	}
+
+	return rc;
+}
+
+int
 spdk_vmd_init(void)
 {
 	return spdk_pci_enumerate(spdk_pci_vmd_get_driver(), vmd_enum_cb, &g_vmd_container);

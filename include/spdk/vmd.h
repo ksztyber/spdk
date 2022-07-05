@@ -86,6 +86,9 @@ int spdk_vmd_hotplug_monitor(void);
  */
 int spdk_vmd_remove_device(struct spdk_pci_device *pci_device);
 
+
+int spdk_vmd_rescan(void);
+
 #ifdef __cplusplus
 }
 #endif
