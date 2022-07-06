@@ -39,22 +39,23 @@
 #endif
 
 struct spdk_posix_sock {
-	struct spdk_sock	base;
-	int			fd;
+	struct spdk_sock		base;
+	int				fd;
 
-	uint32_t		sendmsg_idx;
+	uint32_t			sendmsg_idx;
 
-	struct spdk_pipe	*recv_pipe;
-	void			*recv_buf;
-	int			recv_buf_sz;
-	bool			pipe_has_data;
-	bool			socket_has_data;
-	bool			zcopy;
+	struct spdk_pipe		*recv_pipe;
+	void				*recv_buf;
+	int				recv_buf_sz;
+	bool				pipe_has_data;
+	bool				socket_has_data;
+	bool				zcopy;
 
-	int			placement_id;
+	int				placement_id;
+	struct spdk_sock_impl_opts	impl_opts;
 
-	SSL_CTX			*ctx;
-	SSL			*ssl;
+	SSL_CTX				*ctx;
+	SSL				*ssl;
 
 	TAILQ_ENTRY(spdk_posix_sock)	link;
 };
@@ -298,7 +299,7 @@ posix_sock_set_recvbuf(struct spdk_sock *_sock, int sz)
 
 	assert(sock != NULL);
 
-	if (g_spdk_posix_sock_impl_opts.enable_recv_pipe) {
+	if (sock->impl_opts.enable_recv_pipe) {
 		rc = posix_sock_alloc_pipe(sock, sz);
 		if (rc) {
 			return rc;
@@ -361,17 +362,17 @@ posix_sock_init(struct spdk_posix_sock *sock, bool enable_zero_copy)
 #if defined(__linux__)
 	flag = 1;
 
-	if (g_spdk_posix_sock_impl_opts.enable_quickack) {
+	if (sock->impl_opts.enable_quickack) {
 		rc = setsockopt(sock->fd, IPPROTO_TCP, TCP_QUICKACK, &flag, sizeof(flag));
 		if (rc != 0) {
 			SPDK_ERRLOG("quickack was failed to set\n");
 		}
 	}
 
-	spdk_sock_get_placement_id(sock->fd, g_spdk_posix_sock_impl_opts.enable_placement_id,
+	spdk_sock_get_placement_id(sock->fd, sock->impl_opts.enable_placement_id,
 				   &sock->placement_id);
 
-	if (g_spdk_posix_sock_impl_opts.enable_placement_id == PLACEMENT_MARK) {
+	if (sock->impl_opts.enable_placement_id == PLACEMENT_MARK) {
 		/* Save placement_id */
 		spdk_sock_map_insert(&g_map, sock->placement_id, NULL);
 	}
@@ -379,7 +380,7 @@ posix_sock_init(struct spdk_posix_sock *sock, bool enable_zero_copy)
 }
 
 static struct spdk_posix_sock *
-posix_sock_alloc(int fd, bool enable_zero_copy)
+posix_sock_alloc(int fd, struct spdk_sock_impl_opts *impl_opts, bool enable_zero_copy)
 {
 	struct spdk_posix_sock *sock;
 
@@ -390,6 +391,7 @@ posix_sock_alloc(int fd, bool enable_zero_copy)
 	}
 
 	sock->fd = fd;
+	memcpy(&sock->impl_opts, impl_opts, sizeof(*impl_opts));
 	posix_sock_init(sock, enable_zero_copy);
 
 	return sock;
@@ -934,7 +936,8 @@ retry:
 	/* Only enable zero copy for non-loopback and non-ssl sockets. */
 	enable_zcopy_user_opts = opts->zcopy && !sock_is_loopback(fd) && !enable_ssl;
 
-	sock = posix_sock_alloc(fd, enable_zcopy_user_opts && enable_zcopy_impl_opts);
+	sock = posix_sock_alloc(fd, &g_spdk_posix_sock_impl_opts,
+				enable_zcopy_user_opts && enable_zcopy_impl_opts);
 	if (sock == NULL) {
 		SPDK_ERRLOG("sock allocation failed\n");
 		close(fd);
@@ -1018,7 +1021,7 @@ posix_sock_accept(struct spdk_sock *_sock)
 	}
 
 	/* Inherit the zero copy feature from the listen socket */
-	new_sock = posix_sock_alloc(fd, sock->zcopy);
+	new_sock = posix_sock_alloc(fd, &g_spdk_posix_sock_impl_opts, sock->zcopy);
 	if (new_sock == NULL) {
 		close(fd);
 		return NULL;
