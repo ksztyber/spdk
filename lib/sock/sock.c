@@ -255,6 +255,10 @@ spdk_sock_get_default_opts(struct spdk_sock_opts *opts)
 	if (SPDK_SOCK_OPTS_FIELD_OK(opts, ktls)) {
 		opts->ktls = SPDK_SOCK_DEFAULT_KTLS;
 	}
+
+	if (SPDK_SOCK_OPTS_FIELD_OK(opts, impl_opts)) {
+		opts->impl_opts = NULL;
+	}
 }
 
 /*
@@ -290,6 +294,10 @@ sock_init_opts(struct spdk_sock_opts *opts, struct spdk_sock_opts *opts_user)
 
 	if (SPDK_SOCK_OPTS_FIELD_OK(opts, ktls)) {
 		opts->ktls = opts_user->ktls;
+	}
+
+	if (SPDK_SOCK_OPTS_FIELD_OK(opts, impl_opts)) {
+		opts->impl_opts = opts_user->impl_opts;
 	}
 }
 

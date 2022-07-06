@@ -148,6 +148,27 @@ posix_sock_impl_set_opts(const struct spdk_sock_impl_opts *opts, size_t len)
 	return 0;
 }
 
+
+static void
+posix_get_impl_opts(struct spdk_sock_impl_opts *dest, const struct spdk_sock_opts *opts)
+{
+	struct spdk_sock_impl_opts *impl_opts;
+	size_t opts_size;
+
+	posix_sock_copy_impl_opts(dest, &g_spdk_posix_sock_impl_opts,
+				  sizeof(g_spdk_posix_sock_impl_opts));
+
+	if (opts->impl_opts != NULL) {
+		impl_opts = opts->impl_opts;
+		opts_size = opts->impl_opts_size;
+	} else {
+		impl_opts = &g_spdk_posix_sock_impl_opts;
+		opts_size = sizeof(g_spdk_posix_sock_impl_opts);
+	}
+
+	posix_sock_copy_impl_opts(dest, impl_opts, opts_size);
+}
+
 static int
 posix_sock_getaddr(struct spdk_sock *_sock, char *saddr, int slen, uint16_t *sport,
 		   char *caddr, int clen, uint16_t *cport)
@@ -803,6 +824,7 @@ posix_sock_create(const char *ip, int port,
 		  bool enable_ssl)
 {
 	struct spdk_posix_sock *sock;
+	struct spdk_sock_impl_opts impl_opts;
 	char buf[MAX_TMPBUF];
 	char portnum[PORTNUMLEN];
 	char *p;
@@ -815,6 +837,7 @@ posix_sock_create(const char *ip, int port,
 	SSL *ssl = 0;
 
 	assert(opts != NULL);
+	posix_get_impl_opts(&impl_opts, opts);
 
 	if (ip == NULL) {
 		return NULL;
@@ -888,7 +911,7 @@ retry:
 				fd = -1;
 				break;
 			}
-			enable_zcopy_impl_opts = g_spdk_posix_sock_impl_opts.enable_zerocopy_send_server;
+			enable_zcopy_impl_opts = impl_opts.enable_zerocopy_send_server;
 		} else if (type == SPDK_SOCK_CREATE_CONNECT) {
 			rc = connect(fd, res->ai_addr, res->ai_addrlen);
 			if (rc != 0) {
@@ -898,7 +921,7 @@ retry:
 				fd = -1;
 				continue;
 			}
-			enable_zcopy_impl_opts = g_spdk_posix_sock_impl_opts.enable_zerocopy_send_client;
+			enable_zcopy_impl_opts = impl_opts.enable_zerocopy_send_client;
 			if (enable_ssl) {
 				ctx = posix_sock_create_ssl_context(TLS_client_method(), opts);
 				if (!ctx) {
