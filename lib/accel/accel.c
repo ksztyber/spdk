@@ -10,6 +10,7 @@
 
 #include "accel_internal.h"
 
+#include "spdk/dma.h"
 #include "spdk/env.h"
 #include "spdk/likely.h"
 #include "spdk/log.h"
@@ -35,6 +36,7 @@ static struct spdk_accel_module_if *g_accel_module = NULL;
 static spdk_accel_fini_cb g_fini_cb_fn = NULL;
 static void *g_fini_cb_arg = NULL;
 static bool g_modules_started = false;
+static struct spdk_memory_domain *g_accel_domain;
 
 /* Global list of registered accelerator modules */
 static TAILQ_HEAD(, spdk_accel_module_if) spdk_accel_module_list =
@@ -1064,6 +1066,7 @@ spdk_accel_initialize(void)
 {
 	enum accel_opcode op;
 	struct spdk_accel_module_if *accel_module = NULL;
+	int rc;
 
 	g_modules_started = true;
 	accel_module_initialize();
@@ -1104,6 +1107,13 @@ spdk_accel_initialize(void)
 		assert(g_modules_opc[op] != NULL);
 	}
 #endif
+	rc = spdk_memory_domain_create(&g_accel_domain, SPDK_DMA_DEVICE_TYPE_ACCEL, NULL,
+				       "SPDK_ACCEL_DMA_DEVICE");
+	if (rc != 0) {
+		SPDK_ERRLOG("Failed to create accel memory domain\n");
+		return rc;
+	}
+
 	/*
 	 * We need a unique identifier for the accel framework, so use the
 	 * spdk_accel_module_list address for this purpose.
@@ -1118,6 +1128,8 @@ static void
 accel_module_finish_cb(void)
 {
 	spdk_accel_fini_cb cb_fn = g_fini_cb_fn;
+
+	spdk_memory_domain_destroy(g_accel_domain);
 
 	cb_fn(g_fini_cb_arg);
 	g_fini_cb_fn = NULL;
