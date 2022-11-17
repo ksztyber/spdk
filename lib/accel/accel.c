@@ -801,11 +801,87 @@ accel_sequence_task_cb(void *cb_arg, int status)
 	accel_process_sequence(seq);
 }
 
+static bool
+accel_compare_iovs(struct iovec *iova, uint32_t iovacnt, struct iovec *iovb, uint32_t iovbcnt)
+{
+	/* For now, just do a dumb check that the iovecs arrays are exactly the same */
+	if (iovacnt != iovbcnt) {
+		return false;
+	}
+
+	return memcmp(iova, iovb, sizeof(*iova) * iovacnt) == 0;
+}
+
+static bool
+accel_task_set_copy_buf(struct spdk_accel_task *task, struct spdk_accel_task *copy_task,
+			bool destination)
+{
+	switch (task->op_code) {
+	case ACCEL_OPC_COPY:
+	case ACCEL_OPC_DECOMPRESS:
+		if (destination) {
+			if (task->dst_domain != copy_task->src_domain) {
+				return false;
+			}
+			if (!accel_compare_iovs(task->d.iovs, task->d.iovcnt,
+						copy_task->s.iovs, copy_task->s.iovcnt)) {
+				return false;
+			}
+			task->d.iovs = copy_task->d.iovs;
+			task->d.iovcnt = copy_task->d.iovcnt;
+			task->dst_domain = copy_task->dst_domain;
+		} else {
+			if (task->src_domain != copy_task->dst_domain) {
+				return false;
+			}
+			if (!accel_compare_iovs(task->s.iovs, task->s.iovcnt,
+						copy_task->d.iovs, copy_task->d.iovcnt)) {
+				return false;
+			}
+			task->s.iovs = copy_task->s.iovs;
+			task->s.iovcnt = copy_task->s.iovcnt;
+			task->src_domain = copy_task->src_domain;
+		}
+		break;
+	case ACCEL_OPC_FILL:
+		/* We don't change the buffers for operations that don't have distinct src/dst
+		 * buffers.  Otherwise, we would need to change the buffers of other operations and
+		 * it gets a lot more complex.
+		 */
+		return false;
+	default:
+		assert(0 && "bad opcode");
+		break;
+	}
+
+	return true;
+}
+
 int
 spdk_accel_sequence_finish(struct spdk_accel_sequence *seq,
 			   spdk_accel_completion_cb cb_fn, void *cb_arg)
 {
-	struct spdk_accel_task *task;
+	struct spdk_accel_task *task, *next, *prev;
+
+	/* Try to remove any copy operations if possible */
+	TAILQ_FOREACH_SAFE(task, &seq->tasks, seq_link, next) {
+		if (task->op_code != ACCEL_OPC_COPY) {
+			continue;
+		}
+
+		prev = TAILQ_PREV(task, accel_sequence_tasks, seq_link);
+		if (prev != NULL) {
+			if (accel_task_set_copy_buf(prev, task, true)) {
+				TAILQ_REMOVE(&seq->tasks, task, seq_link);
+				TAILQ_INSERT_TAIL(&seq->completed, task, seq_link);
+			}
+		} else if (next != NULL) {
+			if (accel_task_set_copy_buf(next, task, false)) {
+				TAILQ_REMOVE(&seq->tasks, task, seq_link);
+				TAILQ_INSERT_TAIL(&seq->completed, task, seq_link);
+			}
+		}
+	}
 
 	/* Since we store copy operations' buffers as iovecs, we need to convert them to scalar
 	 * buffers, as that's what accel modules expect
