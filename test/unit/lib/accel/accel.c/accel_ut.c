@@ -1576,6 +1576,12 @@ test_sequence_setup(void)
 	allocate_threads(1);
 	set_thread(0);
 
+	rc = spdk_iobuf_initialize();
+	if (rc != 0) {
+		CU_ASSERT(false);
+		return -1;
+	}
+
 	rc = spdk_accel_initialize();
 	if (rc != 0) {
 		CU_ASSERT(false);
@@ -1586,7 +1592,7 @@ test_sequence_setup(void)
 }
 
 static void
-accel_finish_cb(void *cb_arg)
+finish_cb(void *cb_arg)
 {
 	bool *done = cb_arg;
 
@@ -1598,8 +1604,14 @@ test_sequence_cleanup(void)
 {
 	bool done = false;
 
-	spdk_accel_finish(accel_finish_cb, &done);
+	spdk_accel_finish(finish_cb, &done);
 
+	while (!done) {
+		poll_threads();
+	}
+
+	done = false;
+	spdk_iobuf_finish(finish_cb, &done);
 	while (!done) {
 		poll_threads();
 	}
