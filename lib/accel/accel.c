@@ -32,6 +32,7 @@
 #define ACCEL_LARGE_CACHE_SIZE		16
 /* Set MSB, so we don't return NULL pointers as buffers */
 #define ACCEL_BUFFER_BASE		((void *)(1ull << 63))
+#define ACCEL_BUFFER_OFFSET_MASK	((uintptr_t)ACCEL_BUFFER_BASE - 1)
 
 /* Largest context size for all accel modules */
 static size_t g_max_accel_module_size = sizeof(struct spdk_accel_task);
@@ -56,7 +57,10 @@ static const char *g_opcode_strings[ACCEL_OPC_LAST] = {
 };
 
 struct accel_buffer {
+	struct spdk_accel_sequence	*seq;
+	void				*buf;
 	uint64_t			len;
+	struct spdk_iobuf_entry		iobuf;
 	TAILQ_ENTRY(accel_buffer)	link;
 };
 
@@ -563,6 +567,12 @@ accel_sequence_get_task(struct accel_io_channel *ch, struct spdk_accel_sequence 
 	return task;
 }
 
+static inline bool
+accel_check_domain(struct spdk_memory_domain *domain)
+{
+	return domain == NULL || domain == g_accel_domain;
+}
+
 int
 spdk_accel_append_copy(struct spdk_accel_sequence **pseq, struct spdk_io_channel *ch,
 		       struct iovec *dst_iovs, uint32_t dst_iovcnt,
@@ -575,7 +585,7 @@ spdk_accel_append_copy(struct spdk_accel_sequence **pseq, struct spdk_io_channel
 	struct spdk_accel_task *task;
 	struct spdk_accel_sequence *seq = *pseq;
 
-	if (dst_domain != NULL || src_domain != NULL) {
+	if (!accel_check_domain(dst_domain) || !accel_check_domain(src_domain)) {
 		SPDK_ERRLOG("Memory domains are currently unsupported\n");
 		return -EINVAL;
 	}
@@ -624,7 +634,7 @@ spdk_accel_append_fill(struct spdk_accel_sequence **pseq, struct spdk_io_channel
 	struct spdk_accel_task *task;
 	struct spdk_accel_sequence *seq = *pseq;
 
-	if (domain != NULL) {
+	if (!accel_check_domain(domain)) {
 		SPDK_ERRLOG("Memory domains are currently unsupported\n");
 		return -EINVAL;
 	}
@@ -674,7 +684,7 @@ spdk_accel_append_decompress(struct spdk_accel_sequence **pseq, struct spdk_io_c
 	struct spdk_accel_task *task;
 	struct spdk_accel_sequence *seq = *pseq;
 
-	if (dst_domain != NULL || src_domain != NULL) {
+	if (!accel_check_domain(dst_domain) || !accel_check_domain(src_domain)) {
 		SPDK_ERRLOG("Memory domains are currently unsupported\n");
 		return -EINVAL;
 	}
@@ -725,6 +735,8 @@ accel_get_buf(struct accel_io_channel *ch, uint64_t len)
 
 	TAILQ_REMOVE(&ch->buf_pool, buf, link);
 	buf->len = len;
+	buf->buf = NULL;
+	buf->seq = NULL;
 
 	return buf;
 }
@@ -732,6 +744,10 @@ accel_get_buf(struct accel_io_channel *ch, uint64_t len)
 static inline void
 accel_put_buf(struct accel_io_channel *ch, struct accel_buffer *buf)
 {
+	if (buf->buf != NULL) {
+		spdk_iobuf_put(&ch->iobuf, buf->buf, buf->len);
+	}
+
 	TAILQ_INSERT_HEAD(&ch->buf_pool, buf, link);
 }
 
@@ -813,6 +829,9 @@ accel_sequence_complete(struct spdk_accel_sequence *seq, int status)
 	accel_sequence_put(seq);
 }
 
+static bool accel_sequence_check_virtbuf(struct spdk_accel_sequence *seq,
+		struct spdk_accel_task *task);
+
 static void
 accel_process_sequence(struct spdk_accel_sequence *seq)
 {
@@ -829,8 +848,16 @@ accel_process_sequence(struct spdk_accel_sequence *seq)
 		return;
 	}
 
+	if (!accel_sequence_check_virtbuf(seq, task)) {
+		/* We couldn't allocate a buffer, wait until one is available */
+		return;
+	}
+
 	SPDK_DEBUGLOG(accel, "Executing %s operation, sequence: %p\n",
 		      g_opcode_strings[task->op_code], seq);
+
+	assert(task->src_domain == NULL);
+	assert(task->dst_domain == NULL);
 
 	module = g_modules_opc[task->op_code];
 	module_ch = accel_ch->module_ch[task->op_code];
@@ -841,6 +868,132 @@ accel_process_sequence(struct spdk_accel_sequence *seq)
 			    g_opcode_strings[task->op_code], seq);
 		accel_sequence_complete(seq, rc);
 	}
+}
+
+static void
+accel_update_buf(void **buf, struct accel_buffer *accel_buf)
+{
+	uintptr_t offset;
+
+	offset = (uintptr_t)(*buf) & ACCEL_BUFFER_OFFSET_MASK;
+	assert(offset <= accel_buf->len);
+
+	*buf = (char *)accel_buf->buf + offset;
+}
+
+static void
+accel_update_iovs(struct iovec *iovs, uint32_t iovcnt, struct accel_buffer *buf)
+{
+	uint32_t i;
+
+	for (i = 0; i < iovcnt; ++i) {
+		accel_update_buf(&iovs[i].iov_base, buf);
+	}
+}
+
+static void
+accel_sequence_set_virtbuf(struct spdk_accel_sequence *seq, struct accel_buffer *buf)
+{
+	struct spdk_accel_task *task;
+
+	/* Now that we've allocated the actual data buffer for this accel_buffer, update all tasks
+	 * in a sequence that were using it.
+	 */
+	TAILQ_FOREACH(task, &seq->tasks, seq_link) {
+		switch (task->op_code) {
+		case ACCEL_OPC_DECOMPRESS:
+			if (task->src_domain == g_accel_domain && task->src_domain_ctx == buf) {
+				accel_update_iovs(task->s.iovs, task->s.iovcnt, buf);
+				task->src_domain = NULL;
+			}
+			if (task->dst_domain == g_accel_domain && task->dst_domain_ctx == buf) {
+				accel_update_iovs(task->d.iovs, task->d.iovcnt, buf);
+				task->dst_domain = NULL;
+			}
+			break;
+		case ACCEL_OPC_COPY:
+			/* By the time we're here, we've already changed iovecs -> buf */
+			if (task->src_domain == g_accel_domain && task->src_domain_ctx == buf) {
+				accel_update_buf(&task->src, buf);
+				task->src_domain = NULL;
+			}
+			if (task->dst_domain == g_accel_domain && task->dst_domain_ctx == buf) {
+				accel_update_buf(&task->dst, buf);
+				task->dst_domain = NULL;
+			}
+			break;
+		case ACCEL_OPC_FILL:
+			/* Fill should have src_domain cleared */
+			assert(task->src_domain == NULL);
+			if (task->dst_domain == g_accel_domain && task->dst_domain_ctx == buf) {
+				accel_update_buf(&task->dst, buf);
+				task->dst_domain = NULL;
+			}
+			break;
+		default:
+			assert(0 && "bad opcode");
+			break;
+		}
+	}
+}
+
+static void
+accel_iobuf_get_virtbuf_cb(struct spdk_iobuf_entry *entry, void *buf)
+{
+	struct accel_buffer *accel_buf;
+
+	accel_buf = SPDK_CONTAINEROF(entry, struct accel_buffer, iobuf);
+
+	assert(accel_buf->seq != NULL);
+	assert(accel_buf->buf == NULL);
+	accel_buf->buf = buf;
+
+	accel_sequence_set_virtbuf(accel_buf->seq, accel_buf);
+	accel_process_sequence(accel_buf->seq);
+}
+
+static bool
+accel_sequence_alloc_buf(struct spdk_accel_sequence *seq, struct accel_buffer *buf,
+			 spdk_iobuf_get_cb cb_fn)
+{
+	struct accel_io_channel *ch = seq->ch;
+
+	assert(buf->buf == NULL);
+	assert(buf->seq == NULL);
+
+	buf->seq = seq;
+	buf->buf = spdk_iobuf_get(&ch->iobuf, buf->len, &buf->iobuf, cb_fn);
+	if (buf->buf == NULL) {
+		return false;
+	}
+
+	return true;
+}
+
+static bool
+accel_sequence_check_virtbuf(struct spdk_accel_sequence *seq, struct spdk_accel_task *task)
+{
+	/* If a task doesn't have dst/src (e.g. fill, crc32), its dst/src domain should be set to
+	 * NULL */
+	if (task->src_domain == g_accel_domain) {
+		if (!accel_sequence_alloc_buf(seq, task->src_domain_ctx,
+					      accel_iobuf_get_virtbuf_cb)) {
+			return false;
+		}
+
+		accel_sequence_set_virtbuf(seq, task->src_domain_ctx);
+	}
+
+	if (task->dst_domain == g_accel_domain) {
+		if (!accel_sequence_alloc_buf(seq, task->dst_domain_ctx,
+					      accel_iobuf_get_virtbuf_cb)) {
+			return false;
+		}
+
+		accel_sequence_set_virtbuf(seq, task->dst_domain_ctx);
+	}
+
+	return true;
 }
 
 static void
