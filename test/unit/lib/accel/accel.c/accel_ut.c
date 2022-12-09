@@ -326,10 +326,8 @@ test_spdk_accel_submit_fill(void)
 	/* accel submission OK. */
 	rc = spdk_accel_submit_fill(g_ch, dst, fill, nbytes, flags, NULL, cb_arg);
 	CU_ASSERT(rc == 0);
-	CU_ASSERT(task.dst == dst);
 	CU_ASSERT(task.fill_pattern == fill64);
 	CU_ASSERT(task.op_code == ACCEL_OPC_FILL);
-	CU_ASSERT(task.nbytes == nbytes);
 	CU_ASSERT(task.flags == 0);
 
 	CU_ASSERT(memcmp(dst, src, TEST_SUBMIT_SIZE) == 0);
