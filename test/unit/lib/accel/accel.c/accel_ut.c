@@ -177,10 +177,13 @@ test_spdk_accel_submit_copy(void)
 	/* submission OK. */
 	rc = spdk_accel_submit_copy(g_ch, dst, src, nbytes, flags, NULL, cb_arg);
 	CU_ASSERT(rc == 0);
-	CU_ASSERT(task.dst == dst);
-	CU_ASSERT(task.src == src);
+	CU_ASSERT(task.d.iovcnt == 1);
+	CU_ASSERT(task.d.iovs[0].iov_base == dst);
+	CU_ASSERT(task.d.iovs[0].iov_len == nbytes);
+	CU_ASSERT(task.s.iovcnt == 1);
+	CU_ASSERT(task.s.iovs[0].iov_base == src);
+	CU_ASSERT(task.s.iovs[0].iov_len == nbytes);
 	CU_ASSERT(task.op_code == ACCEL_OPC_COPY);
-	CU_ASSERT(task.nbytes == nbytes);
 	CU_ASSERT(task.flags == 0);
 	CU_ASSERT(memcmp(dst, src, TEST_SUBMIT_SIZE) == 0);
 	expected_accel_task = TAILQ_FIRST(&g_sw_ch->tasks_to_complete);
