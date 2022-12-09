@@ -119,6 +119,23 @@ dsa_done(void *cb_arg, int status)
 }
 
 static int
+idxd_submit_dualcast(struct idxd_io_channel *ch, struct spdk_accel_task *task)
+{
+	if (spdk_unlikely(task->d.iovcnt != 1 || task->d2.iovcnt != 1 || task->s.iovcnt != 1)) {
+		return -EINVAL;
+	}
+
+	if (spdk_unlikely(task->d.iovs[0].iov_len != task->s.iovs[0].iov_len ||
+			  task->d.iovs[0].iov_len != task->d2.iovs[0].iov_len)) {
+		return -EINVAL;
+	}
+
+	return spdk_idxd_submit_dualcast(ch->chan, task->d.iovs[0].iov_base,
+					 task->d2.iovs[0].iov_base, task->s.iovs[0].iov_base,
+					 task->d.iovs[0].iov_len, flags, dsa_done, idxd_task);
+}
+
+static int
 _process_single_task(struct spdk_io_channel *ch, struct spdk_accel_task *task)
 {
 	struct idxd_io_channel *chan = spdk_io_channel_get_ctx(ch);
@@ -147,8 +164,7 @@ _process_single_task(struct spdk_io_channel *ch, struct spdk_accel_task *task)
 			flags |= SPDK_IDXD_FLAG_PERSISTENT;
 			flags |= SPDK_IDXD_FLAG_NONTEMPORAL;
 		}
-		rc = spdk_idxd_submit_dualcast(chan->chan, task->dst, task->dst2, task->src, task->nbytes,
-					       flags, dsa_done, idxd_task);
+		rc = idxd_submit_dualcast(chan, task);
 		break;
 	case ACCEL_OPC_COMPARE:
 		siov.iov_base = task->src;
