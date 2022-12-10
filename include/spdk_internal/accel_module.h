@@ -49,7 +49,6 @@ struct spdk_accel_task {
 			struct iovec		*iovs;
 			uint32_t		iovcnt;
 		} s2;
-		void			*dst;
 	};
 	union {
 		struct {
@@ -64,8 +63,6 @@ struct spdk_accel_task {
 		uint32_t		*output_size;
 	};
 	enum accel_opcode		op_code;
-	uint64_t			nbytes;
-	uint64_t			nbytes_dst;
 	int				flags;
 	int				status;
 	struct iovec			aux_iovs[SPDK_ACCEL_AUX_IOV_MAX];
