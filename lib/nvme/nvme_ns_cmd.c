@@ -407,6 +407,7 @@ _nvme_ns_cmd_rw(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair,
 
 	req->payload_offset = payload_offset;
 	req->md_offset = md_offset;
+	req->accel_sequence = nvme_ns_cmd_get_ext_io_opt(payload->opts, accel_sequence, NULL);
 
 	/* Zone append commands cannot be split. */
 	if (opc == SPDK_NVME_OPC_ZONE_APPEND) {
@@ -738,6 +739,11 @@ spdk_nvme_ns_cmd_readv_ext(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpai
 		if (spdk_unlikely(!_is_io_flags_valid(opts->io_flags))) {
 			return -EINVAL;
 		}
+		if (spdk_unlikely(nvme_ns_cmd_get_ext_io_opt(opts, accel_sequence, NULL) != NULL &&
+				  ((qpair->ctrlr->flags & SPDK_NVME_CTRLR_ACCEL_SEQUENCE_SUPPORTED) == 0 ||
+				   qpair->poll_group == NULL))) {
+			return -EINVAL;
+		}
 
 		payload.opts = opts;
 		payload.md = opts->metadata;
@@ -1031,6 +1037,11 @@ spdk_nvme_ns_cmd_writev_ext(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpa
 
 	if (opts) {
 		if (spdk_unlikely(!_is_io_flags_valid(opts->io_flags))) {
+			return -EINVAL;
+		}
+		if (spdk_unlikely(nvme_ns_cmd_get_ext_io_opt(opts, accel_sequence, NULL) != NULL &&
+				  ((qpair->ctrlr->flags & SPDK_NVME_CTRLR_ACCEL_SEQUENCE_SUPPORTED) == 0 ||
+				   qpair->poll_group == NULL))) {
 			return -EINVAL;
 		}
 
