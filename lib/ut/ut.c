@@ -3,6 +3,7 @@
  */
 
 #include "spdk/stdinc.h"
+#include "spdk/util.h"
 #include "spdk_internal/cunit.h"
 
 enum ut_action {
@@ -12,10 +13,11 @@ enum ut_action {
 };
 
 struct ut_config {
-	const char	*app;
-	const char	*test;
-	const char	*suite;
-	enum ut_action	action;
+	const char			*app;
+	const char			*test;
+	const char			*suite;
+	enum ut_action			action;
+	const struct spdk_ut_opts	*opts;
 };
 
 #define OPTION_STRING "hls:t:"
@@ -45,13 +47,43 @@ usage(const char *app)
 static int
 parse_args(int argc, char **argv, struct ut_config *config)
 {
-	int op;
+	const struct spdk_ut_opts *opts = config->opts;
+#define MAX_OPTSTRING_LEN 4096
+	char optstring[MAX_OPTSTRING_LEN] = {};
+#define MAX_OPT_COUNT 128
+	struct option options[MAX_OPT_COUNT] = {};
+	size_t optlen;
+	int op, rc;
+
+	if (opts != NULL) {
+		if (opts->opts != NULL) {
+			optlen = SPDK_COUNTOF(g_ut_options) + opts->optlen;
+			if (optlen > MAX_OPT_COUNT) {
+				fprintf(stderr, "%s: unsupported number of options: %"PRIu64"\n",
+					config->app, optlen);
+				return -EINVAL;
+			}
+
+			memcpy(&options[0], opts->opts, sizeof(*opts->opts) * opts->optlen);
+			memcpy(&options[opts->optlen], g_ut_options, sizeof(g_ut_options));
+
+			rc = snprintf(optstring, MAX_OPTSTRING_LEN, "%s%s", OPTION_STRING,
+				      opts->optstring);
+			if (rc < 0 || rc >= MAX_OPTSTRING_LEN) {
+				fprintf(stderr, "%s: bad optstring\n", config->app);
+				return -EINVAL;
+			}
+		}
+	} else {
+		strncpy(optstring, OPTION_STRING, sizeof(optstring));
+		memcpy(options, g_ut_options, sizeof(g_ut_options));
+	}
 
 	/* Run the tests by default */
 	config->action = UT_ACTION_RUN_TESTS;
 	config->app = argv[0];
 
-	while ((op = getopt_long(argc, argv, OPTION_STRING, g_ut_options, NULL)) != -1) {
+	while ((op = getopt_long(argc, argv, optstring, options, NULL)) != -1) {
 		switch (op) {
 		case OPTION_TEST_CASE:
 			config->test = optarg;
@@ -65,8 +97,17 @@ parse_args(int argc, char **argv, struct ut_config *config)
 		case OPTION_LIST:
 			config->action = UT_ACTION_LIST_TESTS;
 			break;
-		default:
+		case '?':
 			return -EINVAL;
+		default:
+			if (opts != NULL && opts->opt_cb_fn != NULL) {
+				rc = opts->opt_cb_fn(op, optarg, opts->opt_cb_arg);
+				if (rc != 0) {
+					return rc;
+				}
+			} else {
+				return -EINVAL;
+			}
 		}
 	}
 
@@ -155,7 +196,7 @@ list_tests(void)
 int
 spdk_ut_run_tests(int argc, char **argv, const struct spdk_ut_opts *opts)
 {
-	struct ut_config config = {};
+	struct ut_config config = {.opts = opts};
 	int rc;
 
 	rc = parse_args(argc, argv, &config);

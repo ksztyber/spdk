@@ -25,8 +25,19 @@
 		}				\
 	} while (0)
 
+typedef int (*spdk_ut_option_cb)(int opt, const char *optarg, void *cb_arg);
+
 struct spdk_ut_opts {
-	/* Empty for now */
+	/* Extra optstring */
+	const char *optstring;
+	/* Extra options */
+	const struct option *opts;
+	/* Number of extra options */
+	size_t optlen;
+	/* Extra option callback */
+	spdk_ut_option_cb opt_cb_fn;
+	/* Extra option callback argument */
+	void *opt_cb_arg;
 };
 
 /**
