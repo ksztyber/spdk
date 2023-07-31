@@ -35,13 +35,19 @@ static const struct option g_ut_options[] = {
 };
 
 static void
-usage(const char *app)
+usage(struct ut_config *config)
 {
-	printf("Usage: %s [OPTIONS]\n", app);
+	const struct spdk_ut_opts *opts = config->opts;
+
+	printf("Usage: %s [OPTIONS]\n", config->app);
 	printf("  -t, --test                       run single test case\n");
 	printf("  -s, --suite                      run all tests in a given suite\n");\
 	printf("  -l, --list                       list registered test suites and test cases\n");
 	printf("  -h, --help                       print this help\n");
+
+	if (opts != NULL && opts->usage_cb_fn != NULL) {
+		opts->usage_cb_fn();
+	}
 }
 
 static int
@@ -54,6 +60,10 @@ parse_args(int argc, char **argv, struct ut_config *config)
 	struct option options[MAX_OPT_COUNT] = {};
 	size_t optlen;
 	int op, rc;
+
+	/* Run the tests by default */
+	config->action = UT_ACTION_RUN_TESTS;
+	config->app = argv[0];
 
 	if (opts != NULL) {
 		if (opts->opts != NULL) {
@@ -78,10 +88,6 @@ parse_args(int argc, char **argv, struct ut_config *config)
 		strncpy(optstring, OPTION_STRING, sizeof(optstring));
 		memcpy(options, g_ut_options, sizeof(g_ut_options));
 	}
-
-	/* Run the tests by default */
-	config->action = UT_ACTION_RUN_TESTS;
-	config->app = argv[0];
 
 	while ((op = getopt_long(argc, argv, optstring, options, NULL)) != -1) {
 		switch (op) {
@@ -201,13 +207,13 @@ spdk_ut_run_tests(int argc, char **argv, const struct spdk_ut_opts *opts)
 
 	rc = parse_args(argc, argv, &config);
 	if (rc != 0) {
-		usage(argv[0]);
+		usage(&config);
 		return 1;
 	}
 
 	switch (config.action) {
 	case UT_ACTION_PRINT_HELP:
-		usage(argv[0]);
+		usage(&config);
 		break;
 	case UT_ACTION_RUN_TESTS:
 		rc = run_tests(&config);

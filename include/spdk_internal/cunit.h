@@ -27,6 +27,8 @@
 
 typedef int (*spdk_ut_option_cb)(int opt, const char *optarg, void *cb_arg);
 
+typedef void (*spdk_ut_usage_cb)(void);
+
 struct spdk_ut_opts {
 	/* Extra optstring */
 	const char *optstring;
@@ -38,6 +40,8 @@ struct spdk_ut_opts {
 	spdk_ut_option_cb opt_cb_fn;
 	/* Extra option callback argument */
 	void *opt_cb_arg;
+	/* Usage callback */
+	spdk_ut_usage_cb usage_cb_fn;
 };
 
 /**
