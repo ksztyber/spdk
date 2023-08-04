@@ -1390,9 +1390,38 @@ nvme_free_request(struct nvme_request *req)
 	}
 }
 
+#include <execinfo.h>
+
+static inline void
+print_stack(void)
+{
+	void *addrs[32];
+	char **stack;
+	int i, nptrs;
+
+	nptrs = backtrace(addrs, SPDK_COUNTOF(addrs));
+	stack = backtrace_symbols(addrs, nptrs);
+	for (i = 1; i < nptrs; i++) {
+		/*
+		 * This does not print line numbers. In gdb, use something like "list *0x444b6b" or
+		 * "list *sspin_stack->addrs[0]".  Or more conveniently, load the spdk gdb macros
+		 * and use use "print *sspin" or "print sspin->internal.lock_stack".  See
+		 * gdb_macros.md in the docs directory for details.
+		 */
+		SPDK_ERRLOG("    #%d: %s\n", i, stack[i]);
+	}
+	free(stack);
+}
+
 static inline void
 nvme_qpair_set_state(struct spdk_nvme_qpair *qpair, enum nvme_qpair_state state)
 {
+	if (qpair->state != state) {
+		SPDK_ERRLOG("set_state id=%d, state=%d\n", qpair->id, state);
+		if (state == NVME_QPAIR_DISCONNECTING) {
+			print_stack();
+		}
+	}
 	qpair->state = state;
 	if (state == NVME_QPAIR_ENABLED) {
 		qpair->is_new_qpair = false;

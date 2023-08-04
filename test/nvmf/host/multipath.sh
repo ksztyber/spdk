@@ -21,8 +21,8 @@ NQN=nqn.2016-06.io.spdk:cnode1
 
 cleanup() {
 	process_shm --id $NVMF_APP_SHM_ID || true
-	cat "$testdir/try.txt"
-	rm -f "$testdir/try.txt"
+	#cat "$testdir/try.txt"
+#	rm -f "$testdir/try.txt"
 	killprocess $bdevperf_pid
 	nvmftestfini
 }
@@ -64,12 +64,13 @@ function confirm_io_on_port() {
 	$bpf_sh $nvmfapp_pid "$rootdir/scripts/bpf/nvmf_path.bt" &> "$testdir/trace.txt" &
 	dtrace_pid=$!
 	sleep 6
+	kill $dtrace_pid
+	wait $dtrace_pid || echo $?
 	active_port=$($rpc_py nvmf_subsystem_get_listeners $NQN | jq -r '.[] | select (.ana_states[0].ana_state=="'$1'") | .address.trsvcid')
 	cat "$testdir/trace.txt"
-	port=$(cut < "$testdir/trace.txt" -d ']' -f1 | awk '$1=="@path['$NVMF_FIRST_TARGET_IP'," {print $2}' | sed -n '1p')
+	port=$(cut < "$testdir/trace.txt" -d ']' -f1 | awk '$1=="@path['$NVMF_FIRST_TARGET_IP'," {print $2}' | tail -n1)
 	[[ "$active_port" == "$port" ]]
 	[[ "$port" == "$2" ]]
-	kill $dtrace_pid
 	rm -f "$testdir/trace.txt"
 }
 
@@ -115,11 +116,11 @@ killprocess $bdevperf_pid
 # Make sure we catch bdevperf's exit status
 wait $bdevperf_pid
 
-cat "$testdir/try.txt"
+#cat "$testdir/try.txt"
 
 $rpc_py nvmf_delete_subsystem $NQN
 
 trap - SIGINT SIGTERM EXIT
 
-rm -f "$testdir/try.txt"
+#rm -f "$testdir/try.txt"
 nvmftestfini
