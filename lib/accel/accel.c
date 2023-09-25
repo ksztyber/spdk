@@ -843,16 +843,9 @@ static inline void
 accel_sequence_free(struct spdk_accel_sequence *seq)
 {
 	struct accel_io_channel *ch = seq->ch;
-	struct accel_buffer *buf;
 
 	assert(seq->refcnt == 0);
-
-	while (!TAILQ_EMPTY(&seq->bounce_bufs)) {
-		buf = TAILQ_FIRST(&seq->bounce_bufs);
-		TAILQ_REMOVE(&seq->bounce_bufs, buf, link);
-		accel_put_buf(seq->ch, buf);
-	}
-
+	assert(TAILQ_EMPTY(&seq->bounce_bufs));
 	assert(TAILQ_EMPTY(&seq->tasks));
 	assert(TAILQ_EMPTY(&seq->completed));
 	seq->ch = NULL;
@@ -1249,6 +1242,18 @@ accel_sequence_complete_tasks(struct spdk_accel_sequence *seq)
 }
 
 static void
+accel_sequence_free_bounce_bufs(struct spdk_accel_sequence *seq)
+{
+	struct accel_buffer *buf;
+
+	while (!TAILQ_EMPTY(&seq->bounce_bufs)) {
+		buf = TAILQ_FIRST(&seq->bounce_bufs);
+		TAILQ_REMOVE(&seq->bounce_bufs, buf, link);
+		accel_put_buf(seq->ch, buf);
+	}
+}
+
+static void
 accel_sequence_complete(struct spdk_accel_sequence *seq)
 {
 	SPDK_DEBUGLOG(accel, "Completed sequence: %p with status: %d\n", seq, seq->status);
@@ -1260,10 +1265,10 @@ accel_sequence_complete(struct spdk_accel_sequence *seq)
 
 	/* First notify all users that appended operations to this sequence */
 	accel_sequence_complete_tasks(seq);
+	accel_sequence_free_bounce_bufs(seq);
 
 	/* Then notify the user that finished the sequence */
 	seq->cb_fn(seq->cb_arg, seq->status);
-
 	accel_sequence_put(seq);
 }
 
@@ -1965,6 +1970,7 @@ spdk_accel_sequence_abort(struct spdk_accel_sequence *seq)
 	}
 
 	accel_sequence_complete_tasks(seq);
+	accel_sequence_free_bounce_bufs(seq);
 	accel_sequence_put(seq);
 }
 
