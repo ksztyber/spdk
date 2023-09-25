@@ -591,6 +591,16 @@ void spdk_accel_sequence_reverse(struct spdk_accel_sequence *seq);
 void spdk_accel_sequence_abort(struct spdk_accel_sequence *seq);
 
 /**
+ *
+ */
+int spdk_accel_sequence_pin(struct spdk_accel_sequence *seq);
+
+/**
+ *
+ */
+void spdk_accel_sequence_unpin(struct spdk_accel_sequence *seq, int id);
+
+/**
  * Allocate a buffer from accel domain.  These buffers can be only used with operations appended to
  * a sequence.  The actual data buffer won't be allocated immediately, but only when it's necessary
  * to execute a given operation.  In some cases, this might even mean that a data buffer won't be

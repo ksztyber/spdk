@@ -1976,6 +1976,33 @@ spdk_accel_sequence_abort(struct spdk_accel_sequence *seq)
 	accel_sequence_put(seq);
 }
 
+int
+spdk_accel_sequence_pin(struct spdk_accel_sequence *seq)
+{
+	/* For now, we only support a single pin */
+	if (spdk_unlikely(seq->refcnt > 1)) {
+		return -ENOMEM;
+	}
+
+	seq->refcnt++;
+
+	/* Since we only support a single pin at a time, we can get away with always returning the
+	 * same pin id here */
+	return 1;
+}
+
+void
+spdk_accel_sequence_unpin(struct spdk_accel_sequence *seq, int id)
+{
+	assert(id == 1 && "invalid pin id");
+	assert(seq->refcnt > 0);
+	seq->refcnt--;
+
+	if (seq->refcnt == 0) {
+		/* TODO */
+	}
+}
+
 struct spdk_memory_domain *
 spdk_accel_get_memory_domain(void)
 {
