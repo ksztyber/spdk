@@ -159,6 +159,7 @@ struct spdk_accel_sequence {
 	int					status;
 	/* state uses enum accel_sequence_state */
 	uint8_t					state;
+	uint8_t					refcnt;
 	bool					in_process_sequence;
 	spdk_accel_completion_cb		cb_fn;
 	void					*cb_arg;
@@ -833,15 +834,18 @@ accel_sequence_get(struct accel_io_channel *ch)
 	seq->status = 0;
 	seq->state = ACCEL_SEQUENCE_STATE_INIT;
 	seq->in_process_sequence = false;
+	seq->refcnt = 1;
 
 	return seq;
 }
 
 static inline void
-accel_sequence_put(struct spdk_accel_sequence *seq)
+accel_sequence_free(struct spdk_accel_sequence *seq)
 {
 	struct accel_io_channel *ch = seq->ch;
 	struct accel_buffer *buf;
+
+	assert(seq->refcnt == 0);
 
 	while (!TAILQ_EMPTY(&seq->bounce_bufs)) {
 		buf = TAILQ_FIRST(&seq->bounce_bufs);
@@ -854,6 +858,17 @@ accel_sequence_put(struct spdk_accel_sequence *seq)
 	seq->ch = NULL;
 
 	TAILQ_INSERT_HEAD(&ch->seq_pool, seq, link);
+}
+
+static inline void
+accel_sequence_put(struct spdk_accel_sequence *seq)
+{
+	assert(seq->refcnt > 0);
+	seq->refcnt--;
+
+	if (spdk_likely(seq->refcnt == 0)) {
+		accel_sequence_free(seq);
+	}
 }
 
 static void accel_sequence_task_cb(void *cb_arg, int status);
