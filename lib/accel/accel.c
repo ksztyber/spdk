@@ -313,6 +313,8 @@ _get_task(struct accel_io_channel *accel_ch, spdk_accel_completion_cb cb_fn, voi
 	accel_task->accel_ch = accel_ch;
 	accel_task->s.iovs = NULL;
 	accel_task->d.iovs = NULL;
+	accel_task->bounce.s.orig_iovs = NULL;
+	accel_task->bounce.d.orig_iovs = NULL;
 
 	return accel_task;
 }
