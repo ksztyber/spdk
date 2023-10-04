@@ -623,7 +623,7 @@ int spdk_accel_submit_decrypt(struct spdk_io_channel *ch, struct spdk_accel_cryp
  * Return the name of the module assigned to a specific opcode.
  *
  * \param opcode Accel Framework Opcode enum value. Valid codes can be retrieved using
- * `accel_get_opc_assignments` or `spdk_accel_get_opc_name`.
+ * `accel_get_opc_assignments` or `spdk_accel_get_opcode_name`.
  * \param module_name Pointer to update with module name.
  *
  * \return 0 if a valid module name was provided. -EINVAL for invalid opcode
@@ -635,7 +635,7 @@ int spdk_accel_get_opc_module_name(enum spdk_accel_opcode opcode, const char **m
  * Override the assignment of an opcode to an module.
  *
  * \param opcode Accel Framework Opcode enum value. Valid codes can be retrieved using
- * `accel_get_opc_assignments` or `spdk_accel_get_opc_name`.
+ * `accel_get_opc_assignments` or `spdk_accel_get_opcode_name`.
  * \param name Name of the module to assign. Valid module names may be retrieved
  * with `spdk_accel_get_opc_module_name`
  *
@@ -743,6 +743,15 @@ struct spdk_accel_operation_exec_ctx {
  */
 uint8_t spdk_accel_get_buf_align(enum spdk_accel_opcode opcode,
 				 const struct spdk_accel_operation_exec_ctx *ctx);
+
+/**
+ * Returns the name of an operation based on its opcode.
+ *
+ * \param opcode Opcode.
+ *
+ * \return Name of the operation.
+ */
+const char *spdk_accel_get_opcode_name(enum spdk_accel_opcode opcode);
 
 #ifdef __cplusplus
 }
