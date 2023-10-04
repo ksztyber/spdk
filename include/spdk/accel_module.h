@@ -328,4 +328,9 @@ struct spdk_accel_task *spdk_accel_sequence_first_task(struct spdk_accel_sequenc
  */
 struct spdk_accel_task *spdk_accel_sequence_next_task(struct spdk_accel_task *task);
 
+/**
+ *
+ */
+struct spdk_accel_module_if *spdk_accel_get_module(const char *name);
+
 #endif
