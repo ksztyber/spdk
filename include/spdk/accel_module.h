@@ -148,6 +148,12 @@ struct spdk_accel_module_if {
 	const char *name;
 
 	/**
+	 * Priority of a module used to select a module when multiple modules support the same
+	 * opcode. Lower value means higher priority.
+	 */
+	int priority;
+
+	/**
 	 * Initialization function for the module.  Called by the application during startup.
 	 *
 	 * Modules are required to define this function.
@@ -230,6 +236,9 @@ static void __attribute__((constructor)) _spdk_accel_module_register_##name(void
 { \
 	spdk_accel_module_list_add(module); \
 }
+
+/* Priority of the accel_sw module */
+#define SPDK_ACCEL_SW_PRIORITY (-1)
 
 /**
  * Called by an accel module when cleanup initiated during .module_fini has completed
