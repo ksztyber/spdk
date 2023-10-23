@@ -2051,6 +2051,10 @@ nvme_tcp_read_pdu(struct nvme_tcp_qpair *tqpair, uint32_t *reaped, uint32_t max_
 			nvme_tcp_pdu_payload_handle(tqpair, reaped);
 			break;
 		case NVME_TCP_PDU_RECV_STATE_QUIESCING:
+			if (spdk_unlikely(tqpair->state == NVME_TCP_QPAIR_STATE_EXITING)) {
+				nvme_tcp_qpair_abort_reqs(&tqpair->qpair, 0);
+			}
+
 			if (TAILQ_EMPTY(&tqpair->outstanding_reqs)) {
 				if (nvme_qpair_get_state(&tqpair->qpair) == NVME_QPAIR_DISCONNECTING) {
 					nvme_transport_ctrlr_disconnect_qpair_done(&tqpair->qpair);
@@ -2114,6 +2118,23 @@ nvme_tcp_qpair_check_timeout(struct spdk_nvme_qpair *qpair)
 	}
 }
 
+static bool
+nvme_tcp_qpair_check_disconnecting(struct nvme_tcp_qpair *tqpair)
+{
+	struct spdk_nvme_qpair *qpair = &tqpair->qpair;
+
+	if (nvme_qpair_get_state(qpair) != NVME_QPAIR_DISCONNECTING) {
+		return false;
+	}
+
+	/* The qpair is being disconnected, there might be some outstanding requests that were
+	 * processed by accel at the time when disconnect started, so try to abort them now
+	 */
+	nvme_tcp_qpair_abort_reqs(qpair, 0);
+
+	return true;
+}
+
 static int nvme_tcp_ctrlr_connect_qpair_poll(struct spdk_nvme_ctrlr *ctrlr,
 		struct spdk_nvme_qpair *qpair);
 
@@ -2133,7 +2154,7 @@ nvme_tcp_qpair_process_completions(struct spdk_nvme_qpair *qpair, uint32_t max_c
 				nvme_tcp_qpair_check_timeout(qpair);
 			}
 
-			if (nvme_qpair_get_state(qpair) == NVME_QPAIR_DISCONNECTING) {
+			if (nvme_tcp_qpair_check_disconnecting(tqpair)) {
 				if (TAILQ_EMPTY(&tqpair->outstanding_reqs)) {
 					nvme_transport_ctrlr_disconnect_qpair_done(qpair);
 				}
@@ -2827,7 +2848,7 @@ nvme_tcp_poll_group_process_completions(struct spdk_nvme_transport_poll_group *t
 
 	STAILQ_FOREACH_SAFE(qpair, &tgroup->disconnected_qpairs, poll_group_stailq, tmp_qpair) {
 		tqpair = nvme_tcp_qpair(qpair);
-		if (nvme_qpair_get_state(qpair) == NVME_QPAIR_DISCONNECTING) {
+		if (nvme_tcp_qpair_check_disconnecting(tqpair)) {
 			if (TAILQ_EMPTY(&tqpair->outstanding_reqs)) {
 				nvme_transport_ctrlr_disconnect_qpair_done(qpair);
 			}
