@@ -813,6 +813,13 @@ bdevperf_complete(struct spdk_bdev_io *bdev_io, bool success, void *cb_arg)
 	if (g_error_to_exit == true) {
 		bdevperf_job_drain(job);
 	} else if (!success) {
+		uint32_t cdw0;
+		int sct, sc;
+
+		spdk_bdev_io_get_nvme_status(bdev_io, &cdw0, &sct, &sc);
+		printf("task offset: %" PRIu64 " on job bdev=%s fails, cdw0: %"PRIx32", sct: %x, sc: %x\n",
+		       task->offset_blocks, job->name, cdw0, sct, sc);
+
 		if (!job->reset && !job->continue_on_failure) {
 			bdevperf_job_drain(job);
 			g_run_rc = -1;
