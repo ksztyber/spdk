@@ -200,6 +200,12 @@ spdk_bdev_io_complete(struct spdk_bdev_io *bdev_io, enum spdk_bdev_io_status sta
 	g_completion_called = true;
 }
 
+void
+spdk_bdev_io_complete_from_base(struct spdk_bdev_io *bdev_io, const struct spdk_bdev_io *base_io)
+{
+	spdk_bdev_io_complete(bdev_io, base_io->internal.status);
+}
+
 struct ut_vbdev_crypto_accel_cpl_args {
 	spdk_accel_completion_cb cb_fn;
 	void *cb_arg;
