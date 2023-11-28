@@ -1,0 +1,15 @@
+{
+	global:
+	spdk_keyring_init;
+	spdk_keyring_cleanup;
+	spdk_keyring_add;
+	spdk_keyring_remove;
+	spdk_keyring_get;
+	spdk_keyring_put;
+	spdk_key_alloc;
+	spdk_key_free;
+	spdk_key_get_name;
+	spdk_key_get_key;
+
+	local: *;
+};
