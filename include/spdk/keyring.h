@@ -6,6 +6,7 @@
 #define SPDK_KEYRING_H
 
 #include "spdk/stdinc.h"
+#include "spdk/json.h"
 
 struct spdk_key;
 
@@ -14,6 +15,10 @@ struct spdk_key_opts {
 	size_t size;
 	/** Name of the key */
 	const char *name;
+	/** Name of the keyring module */
+	const char *module;
+	/** Module-specific options */
+	const struct spdk_json_val *opts;
 };
 
 /**
