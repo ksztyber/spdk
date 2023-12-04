@@ -547,20 +547,16 @@ spdk_nvmf_get_next_tgt(struct spdk_nvmf_tgt *prev)
 }
 
 static void
-nvmf_write_subsystem_config_json(struct spdk_json_write_ctx *w,
+nvmf_write_nvme_subsystem_config(struct spdk_json_write_ctx *w,
 				 struct spdk_nvmf_subsystem *subsystem)
 {
 	struct spdk_nvmf_host *host;
-	struct spdk_nvmf_subsystem_listener *listener;
-	const struct spdk_nvme_transport_id *trid;
 	struct spdk_nvmf_ns *ns;
 	struct spdk_nvmf_ns_opts ns_opts;
 	uint32_t max_namespaces;
 	struct spdk_nvmf_transport *transport;
 
-	if (spdk_nvmf_subsystem_get_type(subsystem) != SPDK_NVMF_SUBTYPE_NVME) {
-		return;
-	}
+	assert(spdk_nvmf_subsystem_get_type(subsystem) == SPDK_NVMF_SUBTYPE_NVME);
 
 	/* { */
 	spdk_json_write_object_begin(w);
@@ -659,6 +655,19 @@ nvmf_write_subsystem_config_json(struct spdk_json_write_ctx *w,
 		/* } */
 		spdk_json_write_object_end(w);
 	}
+}
+
+static void
+nvmf_write_subsystem_config_json(struct spdk_json_write_ctx *w,
+				 struct spdk_nvmf_subsystem *subsystem)
+{
+	struct spdk_nvmf_subsystem_listener *listener;
+	struct spdk_nvmf_transport *transport;
+	const struct spdk_nvme_transport_id *trid;
+
+	if (spdk_nvmf_subsystem_get_type(subsystem) == SPDK_NVMF_SUBTYPE_NVME) {
+		nvmf_write_nvme_subsystem_config(w, subsystem);
+	}
 
 	for (listener = spdk_nvmf_subsystem_get_first_listener(subsystem); listener != NULL;
 	     listener = spdk_nvmf_subsystem_get_next_listener(subsystem, listener)) {
@@ -688,7 +697,6 @@ nvmf_write_subsystem_config_json(struct spdk_json_write_ctx *w,
 		/* } */
 		spdk_json_write_object_end(w);
 	}
-
 }
 
 void
