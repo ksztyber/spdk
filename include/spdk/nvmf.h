@@ -158,6 +158,8 @@ struct spdk_nvmf_referral_opts {
 	struct spdk_nvme_transport_id trid;
 	/** The referral describes a referral to a subsystem which requires a secure channel */
 	bool secure_channel;
+	/** Subsystem type */
+	enum spdk_nvmf_subtype subtype;
 };
 
 /**
