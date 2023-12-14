@@ -11,6 +11,8 @@ struct keyfile_key {
 	char *path;
 };
 
+static struct spdk_keyring_module *keyfile_get_module(void);
+
 static int
 keyfile_check_path(const char *path, int *size)
 {
@@ -34,6 +36,41 @@ keyfile_check_path(const char *path, int *size)
 	}
 
 	return 0;
+}
+
+static void
+keyfile_write_key_config(void *ctx, struct spdk_key *key)
+{
+	struct spdk_json_write_ctx *w = ctx;
+	struct keyfile_key *kkey;
+
+	if (spdk_key_get_module(key) != keyfile_get_module()) {
+		return;
+	}
+
+	kkey = spdk_key_get_ctx(key);
+
+	spdk_json_write_object_begin(w);
+	spdk_json_write_named_string(w, "method", "keyfile_add");
+	spdk_json_write_named_object_begin(w, "params");
+	spdk_json_write_named_string(w, "name", spdk_key_get_name(key));
+	spdk_json_write_named_string(w, "path", kkey->path);
+	spdk_json_write_object_end(w);
+	spdk_json_write_object_end(w);
+}
+
+static void
+keyfile_write_config(struct spdk_json_write_ctx *w)
+{
+	spdk_keyring_for_each_key(w, keyfile_write_key_config);
+}
+
+static void
+keyfile_dump_info(struct spdk_key *key, struct spdk_json_write_ctx *w)
+{
+	struct keyfile_key *kkey = spdk_key_get_ctx(key);
+
+	spdk_json_write_named_string(w, "path", kkey->path);
 }
 
 static size_t
@@ -118,6 +155,14 @@ static struct spdk_keyring_module g_keyfile = {
 	.remove_key = keyfile_remove_key,
 	.get_key = keyfile_get_key,
 	.get_ctx_size = keyfile_get_ctx_size,
+	.dump_info = keyfile_dump_info,
+	.write_config = keyfile_write_config,
 };
+
+static struct spdk_keyring_module *
+keyfile_get_module(void)
+{
+	return &g_keyfile;
+}
 
 SPDK_KEYRING_REGISTER_MODULE(keyfile, &g_keyfile);
