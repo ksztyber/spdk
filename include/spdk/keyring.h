@@ -88,4 +88,17 @@ int spdk_keyring_init(void);
  */
 void spdk_keyring_cleanup(void);
 
+/** Iterate over all keys including those that were removed, but still have active references */
+#define SPDK_KEYRING_FOR_EACH_ALL 0x1
+
+/**
+ * Execute a function on each registered key.
+ *
+ * \param ctx Context to pass to the function.
+ * \param fn Function to call.
+ * \param flags Flags controlling the keys to iterate over.
+ */
+void spdk_keyring_for_each_key(void *ctx, void (*fn)(void *ctx, struct spdk_key *key),
+			       uint32_t flags);
+
 #endif /* SPDK_KEYRING_H */

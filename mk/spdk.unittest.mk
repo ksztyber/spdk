@@ -21,7 +21,7 @@ C_SRCS = $(TEST_FILE)
 CFLAGS += -I$(SPDK_ROOT_DIR)/lib
 CFLAGS += -I$(SPDK_ROOT_DIR)/module
 CFLAGS += -I$(SPDK_ROOT_DIR)/test
-CFLAGS += -ffunction-sections
+CFLAGS += -ffunction-sections -fdata-sections
 CFLAGS += -DSPDK_UNIT_TEST=1
 LDFLAGS += -Wl,--gc-sections
 
