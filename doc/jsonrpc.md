@@ -12549,3 +12549,60 @@ Example response:
   }
 ]
 ~~~
+
+### keyring_add_key {#rpc_keyring_add_key}
+
+Add a file-based key to the keyring.
+
+#### Example
+
+Example request:
+~~~json
+{
+  "jsonrpc": "2.0",
+  "method": "keyring_add_key",
+  "id": 1
+  "params": {
+    "name": "key0",
+    "path": "/path/to/key0"
+  }
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": true
+}
+~~~
+
+### keyring_remove_key {#rpc_keyring_remove_key}
+
+Remove a file-based key from the keyring.
+
+#### Example
+
+Example request:
+~~~json
+{
+  "jsonrpc": "2.0",
+  "method": "keyring_remove_key",
+  "id": 1
+  "params": {
+    "name": "key0"
+  }
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": true
+}
+~~~
