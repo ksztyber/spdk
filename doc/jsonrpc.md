@@ -12652,3 +12652,75 @@ Example response:
   }
 ]
 ~~~
+
+### keyring_add_key {#rpc_keyring_add_key}
+
+Add a file-based key to the keyring.
+
+#### Parameters
+
+Name                       | Optional | Type        | Description
+-------------------------- | -------- | ----------- | -----------
+name                       | Required | string      | Name of the key to add.
+module                     | Required | string      | Name of the keyring module.
+keyfile_path               | Optional | string      | Path to a file containing the key (keyfile module only).
+
+#### Example
+
+Example request:
+~~~json
+{
+  "jsonrpc": "2.0",
+  "method": "keyring_add_key",
+  "id": 1
+  "params": {
+    "name": "key0",
+    "module": "keyfile",
+    "keyfile_path": "/path/to/key0"
+  }
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": true
+}
+~~~
+
+### keyring_remove_key {#rpc_keyring_remove_key}
+
+Remove a file-based key from the keyring.
+
+#### Parameters
+
+Name                       | Optional | Type        | Description
+-------------------------- | -------- | ----------- | -----------
+name                       | Required | string      | Name of the key to remove.
+
+#### Example
+
+Example request:
+~~~json
+{
+  "jsonrpc": "2.0",
+  "method": "keyring_remove_key",
+  "id": 1
+  "params": {
+    "name": "key0"
+  }
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": true
+}
+~~~
