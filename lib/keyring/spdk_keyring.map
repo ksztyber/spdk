@@ -8,11 +8,13 @@
 	spdk_keyring_get;
 	spdk_keyring_put;
 	spdk_keyring_for_each_key;
+	spdk_keyring_write_config;
 	spdk_key_alloc;
 	spdk_key_free;
 	spdk_key_get_name;
 	spdk_key_get_key;
 	spdk_key_get_ctx;
+	spdk_key_get_module;
 
 	local: *;
 };
