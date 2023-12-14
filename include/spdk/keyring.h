@@ -88,4 +88,12 @@ int spdk_keyring_init(void);
  */
 void spdk_keyring_cleanup(void);
 
+/**
+ * Execute a function on each registered key.
+ *
+ * \param ctx Context to pass to the function.
+ * \param fn Function to call.
+ */
+void spdk_keyring_for_each_key(void *ctx, void (*fn)(void *ctx, struct spdk_key *key));
+
 #endif /* SPDK_KEYRING_H */

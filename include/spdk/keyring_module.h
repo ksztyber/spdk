@@ -25,6 +25,8 @@ struct spdk_keyring_module {
 	int (*get_key)(struct spdk_key *key, void *buf, int len);
 	/** Get the size of the context associated with a key */
 	size_t (*get_ctx_size)(void);
+	/** Dump information about a key to JSON */
+	void (*dump_info)(struct spdk_key *key, struct spdk_json_write_ctx *w);
 
 	TAILQ_ENTRY(spdk_keyring_module) tailq;
 };
