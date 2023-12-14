@@ -12606,3 +12606,41 @@ Example response:
   "result": true
 }
 ~~~
+
+### keyring_get_keys {#rpc_keyring_get_keys}
+
+Add a file-based key to the keyring.
+
+#### Example
+
+Example request:
+~~~json
+{
+  "jsonrpc": "2.0",
+  "method": "keyring_get_keys",
+  "id": 1
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": [
+    {
+      "name": "key0",
+      "owner": "keyfile",
+      "refcnt": 1,
+      "path": "/path/to/key0"
+    },
+    {
+      "name": "key1",
+      "owner": "keyfile",
+      "refcnt": 1,
+      "path": "/path/to/key1"
+    }
+  ]
+}
+~~~

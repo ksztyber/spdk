@@ -13,3 +13,7 @@ def keyring_add_key(client, name, module, **kwargs):
 
 def keyring_remove_key(client, name):
     return client.call('keyring_remove_key', {'name': name})
+
+
+def keyring_get_keys(client):
+    return client.call('keyring_get_keys')
