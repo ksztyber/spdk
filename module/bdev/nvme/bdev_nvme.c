@@ -14,6 +14,7 @@
 #include "spdk/endian.h"
 #include "spdk/bdev.h"
 #include "spdk/json.h"
+#include "spdk/keyring.h"
 #include "spdk/likely.h"
 #include "spdk/nvme.h"
 #include "spdk/nvme_ocssd.h"
@@ -458,7 +459,7 @@ _nvme_ctrlr_delete(struct nvme_ctrlr *nvme_ctrlr)
 	}
 
 	pthread_mutex_destroy(&nvme_ctrlr->mutex);
-
+	spdk_keyring_put(nvme_ctrlr->psk);
 	free(nvme_ctrlr);
 
 	pthread_mutex_lock(&g_bdev_nvme_mutex);
@@ -5277,11 +5278,13 @@ nvme_ctrlr_create(struct spdk_nvme_ctrlr *ctrlr,
 	nvme_ctrlr = calloc(1, sizeof(*nvme_ctrlr));
 	if (nvme_ctrlr == NULL) {
 		SPDK_ERRLOG("Failed to allocate device struct\n");
+		spdk_keyring_put(ctx->drv_opts.tls_psk);
 		return -ENOMEM;
 	}
 
 	rc = pthread_mutex_init(&nvme_ctrlr->mutex, NULL);
 	if (rc != 0) {
+		spdk_keyring_put(ctx->drv_opts.tls_psk);
 		free(nvme_ctrlr);
 		return rc;
 	}
@@ -5289,6 +5292,7 @@ nvme_ctrlr_create(struct spdk_nvme_ctrlr *ctrlr,
 	TAILQ_INIT(&nvme_ctrlr->trids);
 
 	RB_INIT(&nvme_ctrlr->namespaces);
+	nvme_ctrlr->psk = ctx->drv_opts.tls_psk;
 
 	path_id = calloc(1, sizeof(*path_id));
 	if (path_id == NULL) {
@@ -6014,12 +6018,16 @@ bdev_nvme_create(struct spdk_nvme_transport_id *trid,
 	ctx->drv_opts.transport_tos = g_opts.transport_tos;
 
 	if (ctx->bdev_opts.psk_path[0] != '\0') {
-		rc = bdev_nvme_load_psk(ctx->bdev_opts.psk_path,
-					ctx->drv_opts.psk, sizeof(ctx->drv_opts.psk));
-		if (rc != 0) {
-			SPDK_ERRLOG("Could not load PSK from %s\n", ctx->bdev_opts.psk_path);
-			free(ctx);
-			return rc;
+		/* Try to use the keyring first */
+		ctx->drv_opts.tls_psk = spdk_keyring_get(ctx->bdev_opts.psk_path);
+		if (ctx->drv_opts.tls_psk == NULL) {
+			rc = bdev_nvme_load_psk(ctx->bdev_opts.psk_path,
+						ctx->drv_opts.psk, sizeof(ctx->drv_opts.psk));
+			if (rc != 0) {
+				SPDK_ERRLOG("Could not load PSK from %s\n", ctx->bdev_opts.psk_path);
+				free(ctx);
+				return rc;
+			}
 		}
 	}
 
@@ -6032,6 +6040,7 @@ bdev_nvme_create(struct spdk_nvme_transport_id *trid,
 	ctx->probe_ctx = spdk_nvme_connect_async(trid, &ctx->drv_opts, attach_cb);
 	if (ctx->probe_ctx == NULL) {
 		SPDK_ERRLOG("No controller was found with provided trid (traddr: %s)\n", trid->traddr);
+		spdk_keyring_put(ctx->drv_opts.tls_psk);
 		free(ctx);
 		return -ENODEV;
 	}

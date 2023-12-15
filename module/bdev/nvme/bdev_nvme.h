@@ -154,6 +154,7 @@ struct nvme_ctrlr {
 	struct spdk_nvme_ana_group_descriptor	*copied_ana_desc;
 
 	struct nvme_async_probe_ctx		*probe_ctx;
+	struct spdk_key				*psk;
 
 	pthread_mutex_t				mutex;
 };

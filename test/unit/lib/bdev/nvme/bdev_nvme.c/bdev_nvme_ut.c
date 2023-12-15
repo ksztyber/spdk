@@ -70,6 +70,8 @@ DEFINE_STUB_V(spdk_bdev_add_io_stat, (struct spdk_bdev_io_stat *total,
 				      struct spdk_bdev_io_stat *add));
 
 DEFINE_STUB_V(spdk_nvme_qpair_set_abort_dnr, (struct spdk_nvme_qpair *qpair, bool dnr));
+DEFINE_STUB(spdk_keyring_get, struct spdk_key *, (const char *name), NULL);
+DEFINE_STUB_V(spdk_keyring_put, (struct spdk_key *));
 
 int
 spdk_nvme_ctrlr_get_memory_domains(const struct spdk_nvme_ctrlr *ctrlr,
