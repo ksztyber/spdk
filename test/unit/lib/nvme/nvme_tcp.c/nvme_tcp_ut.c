@@ -48,6 +48,8 @@ DEFINE_STUB_V(spdk_nvme_qpair_print_command, (struct spdk_nvme_qpair *qpair,
 
 DEFINE_STUB_V(spdk_nvme_qpair_print_completion, (struct spdk_nvme_qpair *qpair,
 		struct spdk_nvme_cpl *cpl));
+DEFINE_STUB(spdk_key_get_key, int, (struct spdk_key *key, void *buf, int len), 0);
+DEFINE_STUB(spdk_key_get_name, const char *, (struct spdk_key *key), NULL);
 
 static void
 nvme_transport_ctrlr_disconnect_qpair_done_mocked(struct spdk_nvme_qpair *qpair)
