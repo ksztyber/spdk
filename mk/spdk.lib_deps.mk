@@ -193,3 +193,4 @@ endif
 
 # module/keyring
 DEPDIRS-keyfile := log json keyring util
+DEPDIRS-keyring_linux := log keyring util
