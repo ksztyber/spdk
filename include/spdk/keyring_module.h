@@ -19,6 +19,11 @@ struct spdk_keyring_module {
 	void (*cleanup)(void);
 	/** Write module configuration to JSON */
 	void (*write_config)(struct spdk_json_write_ctx *w);
+	/**
+	 * Probe if a key with a specified name is available.  If it is, the module should add it to
+	 * the keyring and return zero.  Otherwise, -ENOKEY should be returned.
+	 */
+	int (*probe_key)(const char *name);
 	/** Add a key to the keyring */
 	int (*add_key)(struct spdk_key *key, const struct spdk_json_val *opts);
 	/** Remove a key from the keyring */

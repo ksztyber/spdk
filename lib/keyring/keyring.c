@@ -13,6 +13,7 @@ struct spdk_key {
 	char				*name;
 	int				refcnt;
 	bool				removed;
+	bool				probed;
 	struct spdk_keyring_module	*module;
 	TAILQ_ENTRY(spdk_key)		tailq;
 };
@@ -24,7 +25,6 @@ struct spdk_keyring {
 };
 
 static struct spdk_keyring g_keyring = {
-	.mutex = PTHREAD_MUTEX_INITIALIZER,
 	.keys = TAILQ_HEAD_INITIALIZER(g_keyring.keys),
 	.modules = TAILQ_HEAD_INITIALIZER(g_keyring.modules),
 };
@@ -67,7 +67,7 @@ keyring_free_key(struct spdk_key *key)
 	free(key);
 }
 
-static void
+static int
 keyring_put_key(struct spdk_key *key)
 {
 	assert(key->refcnt > 0);
@@ -76,7 +76,11 @@ keyring_put_key(struct spdk_key *key)
 	if (key->refcnt == 0) {
 		assert(key->removed);
 		keyring_free_key(key);
+
+		return 0;
 	}
+
+	return key->refcnt;
 }
 
 int
@@ -157,6 +161,40 @@ out:
 	pthread_mutex_unlock(&g_keyring.mutex);
 }
 
+static struct spdk_key *
+keyring_probe_key(const char *name)
+{
+	struct spdk_keyring_module *module;
+	struct spdk_key *key = NULL;
+	int rc;
+
+	TAILQ_FOREACH(module, &g_keyring.modules, tailq) {
+		if (module->probe_key == NULL) {
+			continue;
+		}
+
+		rc = module->probe_key(name);
+		if (rc == 0) {
+			key = keyring_find_key(name);
+			if (key == NULL) {
+				SPDK_ERRLOG("Successfully probed key '%s' using module '%s', but "
+					    "the key is unavailable\n", name, module->name);
+			}
+
+			key->probed = true;
+			break;
+		} else if (rc != -ENOKEY) {
+			/* The module is aware of the key but couldn't instantiate it */
+			assert(keyring_find_key(name) == NULL);
+			SPDK_ERRLOG("Failed to probe key '%s' using module '%s': %s\n",
+				    name, module->name, spdk_strerror(-rc));
+			break;
+		}
+	}
+
+	return key;
+}
+
 struct spdk_key *
 spdk_keyring_get(const char *name)
 {
@@ -165,7 +203,10 @@ spdk_keyring_get(const char *name)
 	pthread_mutex_lock(&g_keyring.mutex);
 	key = keyring_find_key(name);
 	if (key == NULL) {
-		goto out;
+		key = keyring_probe_key(name);
+		if (key == NULL) {
+			goto out;
+		}
 	}
 
 	key->refcnt++;
@@ -178,12 +219,17 @@ out:
 void
 spdk_keyring_put(struct spdk_key *key)
 {
+	int refcnt;
+
 	if (key == NULL) {
 		return;
 	}
 
 	pthread_mutex_lock(&g_keyring.mutex);
-	keyring_put_key(key);
+	refcnt = keyring_put_key(key);
+	if (refcnt == 1 && key->probed && !key->removed) {
+		keyring_remove_key(key);
+	}
 	pthread_mutex_unlock(&g_keyring.mutex);
 }
 
@@ -257,6 +303,7 @@ keyring_dump_key_info(struct spdk_key *key, struct spdk_json_write_ctx *w)
 	spdk_json_write_named_string(w, "name", key->name);
 	spdk_json_write_named_string(w, "module", module->name);
 	spdk_json_write_named_bool(w, "removed", key->removed);
+	spdk_json_write_named_bool(w, "probed", key->probed);
 	spdk_json_write_named_int32(w, "refcnt", key->refcnt);
 
 	if (module->dump_info != NULL) {
@@ -268,7 +315,26 @@ int
 spdk_keyring_init(void)
 {
 	struct spdk_keyring_module *module, *tmp;
-	int rc = 0;
+	pthread_mutexattr_t attr = {};
+	int rc;
+
+	rc = pthread_mutexattr_init(&attr);
+	if (rc != 0) {
+		SPDK_ERRLOG("Failed to initialize mutex attr\n");
+		return -rc;
+	}
+
+	rc = pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
+	if (rc != 0) {
+		SPDK_ERRLOG("Failed to set mutex attr\n");
+		return -rc;
+	}
+
+	rc = pthread_mutex_init(&g_keyring.mutex, &attr);
+	if (rc != 0) {
+		SPDK_ERRLOG("Failed to initialize mutex\n");
+		return -rc;
+	}
 
 	TAILQ_FOREACH(module, &g_keyring.modules, tailq) {
 		if (module->init != NULL) {
