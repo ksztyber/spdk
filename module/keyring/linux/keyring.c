@@ -3,15 +3,32 @@
  */
 
 #include <keyutils.h>
+#include "keyring_linux.h"
 #include "spdk/keyring.h"
 #include "spdk/keyring_module.h"
 #include "spdk/log.h"
 #include "spdk/string.h"
 #include "spdk/util.h"
 
+static struct keyring_linux_opts g_opts;
+
 struct linux_key {
 	key_serial_t sn;
 };
+
+void
+keyring_linux_get_opts(struct keyring_linux_opts *opts)
+{
+	memcpy(opts, &g_opts, sizeof(*opts));
+}
+
+int
+keyring_linux_set_opts(struct keyring_linux_opts *opts)
+{
+	g_opts.enable = opts->enable;
+
+	return 0;
+}
 
 static int
 linux_find_key(const char *name, key_serial_t *outsn)
@@ -98,19 +115,31 @@ linux_dump_key(struct spdk_key *key, struct spdk_json_write_ctx *w)
 	spdk_json_write_named_uint32(w, "sn", lkey->sn);
 }
 
+static void
+linux_write_config(struct spdk_json_write_ctx *w)
+{
+	spdk_json_write_object_begin(w);
+	spdk_json_write_named_string(w, "method", "keyring_linux_set_options");
+	spdk_json_write_named_object_begin(w, "params");
+	spdk_json_write_named_bool(w, "enable", g_opts.enable);
+	spdk_json_write_object_end(w);
+	spdk_json_write_object_end(w);
+}
+
 static int
 linux_init(void)
 {
-	return -ENODEV;
+	return g_opts.enable ? 0 : -ENODEV;
 }
-
 static struct spdk_keyring_module g_keyring_linux = {
 	.name = "linux",
+	.init = linux_init,
 	.probe_key = linux_probe_key,
 	.add_key = linux_add_key,
 	.remove_key = linux_remove_key,
 	.get_key = linux_get_key,
 	.get_ctx_size = linux_get_ctx_size,
 	.dump_info = linux_dump_key,
+	.write_config = linux_write_config,
 };
 SPDK_KEYRING_REGISTER_MODULE(linux, &g_keyring_linux);
