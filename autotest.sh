@@ -380,6 +380,9 @@ if [ $SPDK_RUN_FUNCTIONAL_TEST -eq 1 ]; then
 	fi
 
 	run_test "keyring_keyfile" "$rootdir/test/keyring/keyfile.sh"
+	if [[ "$CONFIG_HAVE_KEYUTILS" == y ]]; then
+		run_test "keyring_linux" "$rootdir/test/keyring/linux.sh"
+	fi
 fi
 
 trap - SIGINT SIGTERM EXIT
