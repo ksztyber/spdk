@@ -378,6 +378,8 @@ if [ $SPDK_RUN_FUNCTIONAL_TEST -eq 1 ]; then
 	if [[ $SPDK_TEST_RAID5 -eq 1 ]]; then
 		run_test "blockdev_raid5f" $rootdir/test/bdev/blockdev.sh "raid5f"
 	fi
+
+	run_test "keyring_keyfile" "$rootdir/test/keyring/keyfile.sh"
 fi
 
 trap - SIGINT SIGTERM EXIT
