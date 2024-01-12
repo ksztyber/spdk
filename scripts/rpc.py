@@ -3611,10 +3611,11 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
     p.set_defaults(func=keyring_get_keys)
 
     def keyring_linux_set_options(args):
-        rpc.keyring.keyring_linux_set_options(args.client, args.enable)
+        rpc.keyring.keyring_linux_set_options(args.client, args.enable, args.callout_info)
 
     p = subparsers.add_parser('keyring_linux_set_options', help='Set options of the keyring_linux module')
     p.add_argument('-e', '--enable', help='Enable keyring_linux module', action='store_true')
+    p.add_argument('-c', '--callout-info', help='Callout info')
     p.set_defaults(func=keyring_linux_set_options)
 
     def check_called_name(name):

@@ -25,6 +25,17 @@ keyring_linux_get_opts(struct keyring_linux_opts *opts)
 int
 keyring_linux_set_opts(struct keyring_linux_opts *opts)
 {
+	char *callout = NULL;
+
+	if (opts->callout_info != NULL) {
+		callout = strdup(opts->callout_info);
+		if (callout == NULL) {
+			return -ENOMEM;
+		}
+	}
+
+	free(g_opts.callout_info);
+	g_opts.callout_info = callout;
 	g_opts.enable = opts->enable;
 
 	return 0;
@@ -35,7 +46,7 @@ linux_find_key(const char *name, key_serial_t *outsn)
 {
 	key_serial_t sn;
 
-	sn = request_key("user", name, NULL, KEY_SPEC_SESSION_KEYRING);
+	sn = request_key("user", name, g_opts.callout_info, KEY_SPEC_SESSION_KEYRING);
 	if (sn == -1) {
 		return -errno;
 	}
@@ -122,6 +133,9 @@ linux_write_config(struct spdk_json_write_ctx *w)
 	spdk_json_write_named_string(w, "method", "keyring_linux_set_options");
 	spdk_json_write_named_object_begin(w, "params");
 	spdk_json_write_named_bool(w, "enable", g_opts.enable);
+	if (g_opts.callout_info != NULL) {
+		spdk_json_write_named_string(w, "callout_info", g_opts.callout_info);
+	}
 	spdk_json_write_object_end(w);
 	spdk_json_write_object_end(w);
 }
@@ -131,9 +145,17 @@ linux_init(void)
 {
 	return g_opts.enable ? 0 : -ENODEV;
 }
+
+static void
+linux_cleanup(void)
+{
+	free(g_opts.callout_info);
+}
+
 static struct spdk_keyring_module g_keyring_linux = {
 	.name = "linux",
 	.init = linux_init,
+	.cleanup = linux_cleanup,
 	.probe_key = linux_probe_key,
 	.add_key = linux_add_key,
 	.remove_key = linux_remove_key,
