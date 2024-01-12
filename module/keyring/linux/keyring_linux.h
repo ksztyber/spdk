@@ -9,6 +9,7 @@
 
 struct keyring_linux_opts {
 	bool enable;
+	char *callout_info;
 };
 
 int keyring_linux_set_opts(struct keyring_linux_opts *opts);

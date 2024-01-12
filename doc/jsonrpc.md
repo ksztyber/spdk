@@ -12808,6 +12808,7 @@ Set options of the keyring_linux module.
 Name                    | Optional | Type        | Description
 ----------------------- | -------- | ----------- | -----------
 enable                  | Optional | boolean     | Enable the module.
+callout_info            | Optional | string      | Callout info.
 
 #### Example
 

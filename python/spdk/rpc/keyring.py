@@ -19,8 +19,10 @@ def keyring_get_keys(client):
     return client.call('keyring_get_keys')
 
 
-def keyring_linux_set_options(client, enable=None):
+def keyring_linux_set_options(client, enable=None, callout_info=None):
     params = {}
     if enable is not None:
         params['enable'] = enable
+    if callout_info is not None:
+        params['callout_info'] = callout_info
     return client.call('keyring_linux_set_options', params)

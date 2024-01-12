@@ -38,6 +38,7 @@ cleanup() {
 	for key in key0 key1; do
 		unlink_key $key || :
 	done
+	rm -f /etc/request-key.d/spdk-test.conf /tmp/spdk-test:* || :
 	killprocess $bperfpid || :
 	killprocess $tgtpid || :
 }
@@ -83,3 +84,47 @@ check_keys 0
 # Try to use wrong key
 NOT bperf_cmd bdev_nvme_attach_controller -b nvme0 -t tcp -a 127.0.0.1 -s 4420 -f ipv4 \
 	-n $subnqn -q $hostnqn --psk spdk-test:key1
+
+killprocess $bperfpid
+unlink_key "key0"
+unlink_key "key1"
+
+# Use callout info and request-key.sh to instantiate the keys
+echo "create user spdk-test:* * $testdir/request-key.sh %k %d %S" > /etc/request-key.d/spdk-test.conf
+"$rootdir/build/examples/bdevperf" -q 128 -o 4k -w randread -t 1 -m 2 \
+	-r "$bperfsock" --wait-for-rpc -z &
+bperfpid=$!
+
+waitforlisten $bperfpid "$bperfsock"
+bperf_cmd keyring_linux_set_options --enable --callout-info ""
+bperf_cmd framework_start_init
+bperf_cmd bdev_nvme_attach_controller -b nvme0 -t tcp -a 127.0.0.1 -s 4420 -f ipv4 \
+	-n $subnqn -q $hostnqn --psk spdk-test:key0
+check_keys 1 "spdk-test:key0"
+
+"$rootdir/examples/bdev/bdevperf/bdevperf.py" -s "$bperfsock" perform_tests
+
+bperf_cmd bdev_nvme_detach_controller nvme0
+check_keys 0
+
+NOT bperf_cmd bdev_nvme_attach_controller -b nvme0 -t tcp -a 127.0.0.1 -s 4420 -f ipv4 \
+	-n $subnqn -q $hostnqn --psk spdk-test:key1
+check_keys 0
+
+# Check save/load config
+bperf_cmd bdev_nvme_attach_controller -b nvme0 -t tcp -a 127.0.0.1 -s 4420 -f ipv4 \
+	-n $subnqn -q $hostnqn --psk spdk-test:key0
+config=$(bperf_cmd save_config)
+
+killprocess $bperfpid
+unlink_key "key0"
+
+"$rootdir/build/examples/bdevperf" -q 128 -o 4k -w randread -t 1 -m 2 \
+	-r "$bperfsock" -z -c <(echo "$config") &
+bperfpid=$!
+
+waitforlisten $bperfpid "$bperfsock"
+keys=$(bperf_cmd keyring_get_keys) sn=$(jq -r ".[0].sn" <<< "$keys")
+check_keys 1 "spdk-test:key0"
+
+"$rootdir/examples/bdev/bdevperf/bdevperf.py" -s "$bperfsock" perform_tests

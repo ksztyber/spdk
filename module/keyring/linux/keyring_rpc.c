@@ -9,6 +9,7 @@
 
 static const struct spdk_json_object_decoder rpc_keyring_linux_set_options_decoders[] = {
 	{"enable", offsetof(struct keyring_linux_opts, enable), spdk_json_decode_bool, true},
+	{"callout_info", offsetof(struct keyring_linux_opts, callout_info), spdk_json_decode_string, true},
 };
 
 static void
@@ -29,9 +30,11 @@ rpc_keyring_linux_set_options(struct spdk_jsonrpc_request *request,
 	rc = keyring_linux_set_opts(&opts);
 	if (rc != 0) {
 		spdk_jsonrpc_send_error_response(request, rc, spdk_strerror(-rc));
-		return;
+		goto out;
 	}
 
 	spdk_jsonrpc_send_bool_response(request, true);
+out:
+	free(opts.callout_info);
 }
 SPDK_RPC_REGISTER("keyring_linux_set_options", rpc_keyring_linux_set_options, SPDK_RPC_STARTUP)
