@@ -2,11 +2,16 @@
  * Copyright (c) 2024 Intel Corporation.  All rights reserved.
  */
 
+#include "spdk/base64.h"
+#include "spdk/crc32.h"
+#include "spdk/endian.h"
 #include "spdk/log.h"
 #include "spdk/string.h"
+#include "spdk/util.h"
 #include "nvme_internal.h"
 
-#define NVME_AUTH_DATA_SIZE 4096
+#define NVME_AUTH_DATA_SIZE		4096
+#define NVME_AUTH_CHAP_KEY_MAX_SIZE	256
 
 #define AUTH_DEBUGLOG(q, fmt, ...)					\
 	SPDK_DEBUGLOG(nvme_auth, "[nqn=%s:qid=%u] " fmt,		\
@@ -67,6 +72,93 @@ nvme_auth_set_failure(struct spdk_nvme_qpair *qpair, int status, bool failure2)
 	nvme_auth_set_state(qpair, failure2 ?
 			    NVME_QPAIR_AUTH_STATE_AWAIT_FAILURE2 :
 			    NVME_QPAIR_AUTH_STATE_DONE);
+}
+
+static int
+nvme_auth_transform_key(struct spdk_key *key, int hash, const void *keyin, size_t keylen,
+			void *out, size_t outlen)
+{
+	switch (hash) {
+	case SPDK_NVMF_AUTH_HASH_NONE:
+		if (keylen > outlen) {
+			SPDK_ERRLOG("Key buffer is too small: %zu < %zu\n", outlen, keylen);
+			return -ENOBUFS;
+		}
+		memcpy(out, keyin, keylen);
+		return keylen;
+	case SPDK_NVMF_AUTH_HASH_SHA256:
+	case SPDK_NVMF_AUTH_HASH_SHA384:
+	case SPDK_NVMF_AUTH_HASH_SHA512:
+		SPDK_ERRLOG("Key transformation is not supported\n");
+		return -EINVAL;
+	default:
+		SPDK_ERRLOG("Unsupported key %s hash: 0x%x\n", spdk_key_get_name(key), hash);
+		return -EINVAL;
+	}
+}
+
+int nvme_auth_get_key(struct spdk_key *key, void *buf, size_t buflen);
+
+int
+nvme_auth_get_key(struct spdk_key *key, void *buf, size_t buflen)
+{
+	char keystr[NVME_AUTH_CHAP_KEY_MAX_SIZE + 1] = {};
+	char keyb64[NVME_AUTH_CHAP_KEY_MAX_SIZE] = {};
+	char *tmp, *secret;
+	int rc, hash;
+	size_t keylen;
+
+	rc = spdk_key_get_key(key, keystr, NVME_AUTH_CHAP_KEY_MAX_SIZE);
+	if (rc < 0) {
+		SPDK_ERRLOG("Failed to load key %s: %s\n", spdk_key_get_name(key),
+			    spdk_strerror(-rc));
+		goto out;
+	}
+
+	rc = sscanf(keystr, "DHHC-1:%02x:", &hash);
+	if (rc != 1) {
+		SPDK_ERRLOG("Invalid format of key: %s\n", spdk_key_get_name(key));
+		rc = -EINVAL;
+		goto out;
+
+	}
+	/* Start at the first character after second ":" and remove the trailing ":" */
+	secret = &keystr[10];
+	tmp = strstr(secret, ":");
+	if (!tmp) {
+		SPDK_ERRLOG("Invalid format of key: %s\n", spdk_key_get_name(key));
+		rc = -EINVAL;
+		goto out;
+	}
+
+	*tmp = '\0';
+	keylen = sizeof(keyb64);
+	rc = spdk_base64_decode(keyb64, &keylen, secret);
+	if (rc != 0) {
+		SPDK_ERRLOG("Invalid format of key: %s\n", spdk_key_get_name(key));
+		rc = -EINVAL;
+		goto out;
+	}
+	/* Last 4B should contain crc32 of the key, so the buffer must be longer than that */
+	if (keylen <= 4) {
+		SPDK_ERRLOG("Invalid key size: %zu\n", keylen);
+		rc = -EINVAL;
+		goto out;
+	}
+
+	keylen -= 4;
+	if (~spdk_crc32_ieee_update(keyb64, keylen, ~0) != from_le32(&keyb64[keylen])) {
+		SPDK_ERRLOG("Bad key %s checksum\n", spdk_key_get_name(key));
+		rc = -EINVAL;
+		goto out;
+	}
+
+	rc = nvme_auth_transform_key(key, hash, keyb64, keylen, buf, buflen);
+out:
+	spdk_memset_s(keystr, sizeof(keystr), 0, sizeof(keystr));
+	spdk_memset_s(keyb64, sizeof(keyb64), 0, sizeof(keyb64));
+
+	return rc;
 }
 
 static void
