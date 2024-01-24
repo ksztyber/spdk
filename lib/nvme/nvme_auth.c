@@ -161,12 +161,7 @@ out:
 	return rc;
 }
 
-int nvme_auth_calc_response(struct spdk_key *key, enum spdk_nvmf_auth_hash hash,
-			    uint32_t seq, uint16_t tid, uint8_t scc,
-			    const char *subnqn, const char *hostnqn, const void *dhkey, size_t dhlen,
-			    const void *cval, void *rval);
-
-int
+static int
 nvme_auth_calc_response(struct spdk_key *key, enum spdk_nvmf_auth_hash hash,
 			uint32_t seq, uint16_t tid, uint8_t scc,
 			const char *subnqn, const char *hostnqn, const void *dhkey, size_t dhlen,
@@ -458,6 +453,48 @@ error:
 	return -EACCES;
 }
 
+static int
+nvme_auth_send_reply(struct spdk_nvme_qpair *qpair)
+{
+	struct nvme_completion_poll_status *status = qpair->poll_status;
+	struct spdk_nvme_ctrlr *ctrlr = qpair->ctrlr;
+	struct spdk_nvmf_auth_challenge *challenge = status->dma_data;
+	struct spdk_nvmf_auth_reply *reply = status->dma_data;
+	struct nvme_auth *auth = &qpair->auth;
+	uint8_t hl, response[NVME_AUTH_DATA_SIZE];
+	int rc;
+
+	hl = nvme_auth_get_digest_len(challenge->hash_id);
+	AUTH_DEBUGLOG(qpair, "key=%s, hash=%u, dhgroup=%u, seq=%u, tid=%u, subnqn=%s, hostnqn=%s, "
+		      "len=%u\n", spdk_key_get_name(ctrlr->opts.chap_key),
+		      challenge->hash_id, challenge->dhg_id, challenge->seqnum, auth->tid,
+		      ctrlr->trid.subnqn, ctrlr->opts.hostnqn, hl);
+	rc = nvme_auth_calc_response(ctrlr->opts.chap_key,
+				     (enum spdk_nvmf_auth_hash)challenge->hash_id,
+				     challenge->seqnum, auth->tid, 0,
+				     ctrlr->trid.subnqn, ctrlr->opts.hostnqn, NULL, 0,
+				     challenge->cval, response);
+	if (rc != 0) {
+		AUTH_ERRLOG(qpair, "failed to calculate response: %s\n", spdk_strerror(-rc));
+		return rc;
+	}
+
+	/* Now that the reponse has been calculated, send the reply */
+	memset(qpair->poll_status->dma_data, 0, NVME_AUTH_DATA_SIZE);
+	memcpy(reply->rval, response, hl);
+
+	reply->auth_type = SPDK_NVMF_AUTH_TYPE_DH_HMAC_CHAP;
+	reply->auth_id = SPDK_NVMF_AUTH_ID_REPLY;
+	reply->t_id = auth->tid;
+	reply->hl = hl;
+	reply->cvalid = 0;
+	reply->dhvlen = 0;
+	reply->seqnum = 0;
+
+	return nvme_auth_submit_request(qpair, SPDK_NVMF_FABRIC_COMMAND_AUTHENTICATION_SEND,
+					sizeof(*reply) + 2 * reply->hl);
+}
+
 int
 nvme_fabric_qpair_authenticate_poll(struct spdk_nvme_qpair *qpair)
 {
@@ -512,9 +549,26 @@ nvme_fabric_qpair_authenticate_poll(struct spdk_nvme_qpair *qpair)
 			if (rc != 0) {
 				break;
 			}
+			rc = nvme_auth_send_reply(qpair);
+			if (rc != 0) {
+				nvme_auth_set_failure(qpair, rc, false);
+				AUTH_ERRLOG(qpair, "failed to send DH-HMAC-CHAP_reply: %s\n",
+					    spdk_strerror(-rc));
+				break;
+			}
 			nvme_auth_set_state(qpair, NVME_QPAIR_AUTH_STATE_AWAIT_REPLY);
 			break;
 		case NVME_QPAIR_AUTH_STATE_AWAIT_REPLY:
+			rc = nvme_wait_for_completion_robust_lock_timeout_poll(qpair, status, NULL);
+			if (rc != 0) {
+				if (rc != -EAGAIN) {
+					nvme_auth_print_cpl(qpair, "DH-HMAC-CHAP_reply");
+					nvme_auth_set_failure(qpair, rc, false);
+				}
+				break;
+			}
+			nvme_auth_set_state(qpair, NVME_QPAIR_AUTH_STATE_AWAIT_SUCCESS1);
+			break;
 		case NVME_QPAIR_AUTH_STATE_AWAIT_SUCCESS1:
 			nvme_auth_set_failure(qpair, -ENOTSUP, false);
 			break;
