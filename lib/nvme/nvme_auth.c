@@ -9,6 +9,7 @@
 #include "spdk/string.h"
 #include "spdk/util.h"
 #include "nvme_internal.h"
+#include <openssl/evp.h>
 
 #define NVME_AUTH_DATA_SIZE		4096
 #define NVME_AUTH_CHAP_KEY_MAX_SIZE	256
@@ -98,9 +99,7 @@ nvme_auth_transform_key(struct spdk_key *key, int hash, const void *keyin, size_
 	}
 }
 
-int nvme_auth_get_key(struct spdk_key *key, void *buf, size_t buflen);
-
-int
+static int
 nvme_auth_get_key(struct spdk_key *key, void *buf, size_t buflen)
 {
 	char keystr[NVME_AUTH_CHAP_KEY_MAX_SIZE + 1] = {};
@@ -158,6 +157,103 @@ nvme_auth_get_key(struct spdk_key *key, void *buf, size_t buflen)
 out:
 	spdk_memset_s(keystr, sizeof(keystr), 0, sizeof(keystr));
 	spdk_memset_s(keyb64, sizeof(keyb64), 0, sizeof(keyb64));
+
+	return rc;
+}
+
+int nvme_auth_calc_response(struct spdk_key *key, enum spdk_nvmf_auth_hash hash,
+			    uint32_t seq, uint16_t tid, uint8_t scc,
+			    const char *subnqn, const char *hostnqn, const void *dhkey, size_t dhlen,
+			    const void *cval, void *rval);
+
+int
+nvme_auth_calc_response(struct spdk_key *key, enum spdk_nvmf_auth_hash hash,
+			uint32_t seq, uint16_t tid, uint8_t scc,
+			const char *subnqn, const char *hostnqn, const void *dhkey, size_t dhlen,
+			const void *cval, void *rval)
+{
+	EVP_MAC *hmac;
+	EVP_MAC_CTX *ctx;
+	OSSL_PARAM params[2];
+	uint8_t keybuf[NVME_AUTH_CHAP_KEY_MAX_SIZE], term = 0;
+	const char *digest;
+	size_t hlen;
+	int rc, keylen;
+
+	assert(dhkey == NULL && dhlen == 0);
+	hmac = EVP_MAC_fetch(NULL, "hmac", NULL);
+	if (hmac == NULL) {
+		return -EIO;
+	}
+
+	ctx = EVP_MAC_CTX_new(hmac);
+	if (ctx == NULL) {
+		rc = -EIO;
+		goto out;
+	}
+
+	keylen = nvme_auth_get_key(key, keybuf, sizeof(keybuf));
+	if (keylen < 0) {
+		rc = keylen;
+		goto out;
+	}
+
+	switch (hash) {
+	case SPDK_NVMF_AUTH_HASH_SHA256:
+		digest = "sha256";
+		break;
+	case SPDK_NVMF_AUTH_HASH_SHA384:
+		digest = "sha384";
+		break;
+	case SPDK_NVMF_AUTH_HASH_SHA512:
+		digest = "sha512";
+		break;
+	default:
+		assert(0 && "invalid hash");
+		rc = -EINVAL;
+		goto out;
+	}
+
+	hlen = nvme_auth_get_digest_len(hash);
+	params[0] = OSSL_PARAM_construct_utf8_string("digest", (char *)digest, 0);
+	params[1] = OSSL_PARAM_construct_end();
+
+	rc = -EIO;
+	if (EVP_MAC_init(ctx, keybuf, (size_t)keylen, params) != 1) {
+		goto out;
+	}
+	if (EVP_MAC_update(ctx, cval, hlen) != 1) {
+		goto out;
+	}
+	if (EVP_MAC_update(ctx, (void *)&seq, sizeof(seq)) != 1) {
+		goto out;
+	}
+	if (EVP_MAC_update(ctx, (void *)&tid, sizeof(tid)) != 1) {
+		goto out;
+	}
+	if (EVP_MAC_update(ctx, (void *)&scc, sizeof(scc)) != 1) {
+		goto out;
+	}
+	if (EVP_MAC_update(ctx, (void *)"HostHost", 8) != 1) {
+		goto out;
+	}
+	if (EVP_MAC_update(ctx, (void *)hostnqn, strlen(hostnqn)) != 1) {
+		goto out;
+	}
+	if (EVP_MAC_update(ctx, (void *)&term, sizeof(term)) != 1) {
+		goto out;
+	}
+	if (EVP_MAC_update(ctx, (void *)subnqn, strlen(subnqn)) != 1) {
+		goto out;
+	}
+	if (EVP_MAC_final(ctx, rval, &hlen, hlen) != 1) {
+		goto out;
+	}
+	rc = 0;
+out:
+	spdk_memset_s(keybuf, sizeof(keybuf), 0, sizeof(keybuf));
+	EVP_MAC_CTX_free(ctx);
+	EVP_MAC_free(hmac);
 
 	return rc;
 }
