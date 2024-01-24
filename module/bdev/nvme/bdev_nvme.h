@@ -21,7 +21,8 @@ extern pthread_mutex_t g_bdev_nvme_mutex;
 extern bool g_bdev_nvme_module_finish;
 extern struct spdk_thread *g_bdev_nvme_init_thread;
 
-#define NVME_MAX_CONTROLLERS 1024
+#define NVME_MAX_CONTROLLERS	1024
+#define NVME_MAX_KEY_NAME_LEN	256
 
 enum bdev_nvme_multipath_policy {
 	BDEV_NVME_MP_POLICY_ACTIVE_PASSIVE,
@@ -45,6 +46,7 @@ struct nvme_ctrlr_opts {
 	bool from_discovery_service;
 	/* Name of the PSK or path to the file containing PSK. */
 	char psk[PATH_MAX];
+	const char *chap_key;
 };
 
 struct nvme_async_probe_ctx {
@@ -155,6 +157,7 @@ struct nvme_ctrlr {
 
 	struct nvme_async_probe_ctx		*probe_ctx;
 	struct spdk_key				*psk;
+	struct spdk_key				*chap_key;
 
 	pthread_mutex_t				mutex;
 };
