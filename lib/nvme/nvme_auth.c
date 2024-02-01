@@ -13,12 +13,29 @@
 
 #define NVME_AUTH_DATA_SIZE		4096
 #define NVME_AUTH_CHAP_KEY_MAX_SIZE	256
+#define NVME_AUTH_DIGEST_MAX_SIZE	64
 
 #define AUTH_DEBUGLOG(q, fmt, ...)					\
 	SPDK_DEBUGLOG(nvme_auth, "[nqn=%s:qid=%u] " fmt,		\
 		      (q)->ctrlr->trid.subnqn, (q)->id, ## __VA_ARGS__)
 #define AUTH_ERRLOG(q, fmt, ...) \
 	SPDK_ERRLOG("[nqn=%s:qid=%u] " fmt, (q)->ctrlr->trid.subnqn, (q)->id, ## __VA_ARGS__)
+
+static const char *
+nvme_auth_get_digest_name(uint8_t id)
+{
+	const char *names[] = {
+		[SPDK_NVMF_AUTH_HASH_SHA256] = "sha256",
+		[SPDK_NVMF_AUTH_HASH_SHA384] = "sha384",
+		[SPDK_NVMF_AUTH_HASH_SHA512] = "sha512",
+	};
+
+	if (id >= SPDK_COUNTOF(names)) {
+		return NULL;
+	}
+
+	return names[id];
+}
 
 static uint8_t
 nvme_auth_get_digest_len(uint8_t id)
@@ -161,6 +178,72 @@ out:
 }
 
 static int
+nvme_auth_augment_challenge(const void *cval, size_t clen, const void *key, size_t keylen,
+			    void *caval, size_t *calen, enum spdk_nvmf_auth_hash hash)
+{
+	EVP_MAC *hmac = NULL;
+	EVP_MAC_CTX *ctx = NULL;
+	EVP_MD *md = NULL;
+	OSSL_PARAM params[2];
+	uint8_t keydgst[NVME_AUTH_DIGEST_MAX_SIZE];
+	unsigned int dgstlen = sizeof(keydgst);
+	int rc = 0;
+
+	/* If there's no key, there's nothing to augment, cval == caval */
+	if (key == NULL) {
+		assert(clen <= *calen);
+		memcpy(caval, cval, clen);
+		*calen = clen;
+		return 0;
+	}
+
+	md = EVP_MD_fetch(NULL, nvme_auth_get_digest_name(hash), NULL);
+	if (!md) {
+		SPDK_ERRLOG("Failed to fetch digest function: %d\n", hash);
+		return -EINVAL;
+	}
+	if (EVP_Digest(key, keylen, keydgst, &dgstlen, md, NULL) != 1) {
+		SPDK_ERRLOG("Failed to calculate key digest\n");
+		return -EIO;
+	}
+
+	hmac = EVP_MAC_fetch(NULL, "hmac", NULL);
+	if (hmac == NULL) {
+		SPDK_ERRLOG("Failed to fetch HMAC\n");
+		return -EIO;
+	}
+	ctx = EVP_MAC_CTX_new(hmac);
+	if (ctx == NULL) {
+		SPDK_ERRLOG("Failed to fetch HMAC ctx\n");
+		rc = -EIO;
+		goto out;
+	}
+
+	params[0] = OSSL_PARAM_construct_utf8_string("digest",
+						     (char *)EVP_MD_get0_name(md), 0);
+	params[1] = OSSL_PARAM_construct_end();
+
+	if (EVP_MAC_init(ctx, keydgst, dgstlen, params) != 1) {
+		rc = -EIO;
+		goto out;
+	}
+	if (EVP_MAC_update(ctx, cval, clen) != 1) {
+		rc = -EIO;
+		goto out;
+	}
+	if (EVP_MAC_final(ctx, caval, calen, *calen) != 1) {
+		rc = -EIO;
+		goto out;
+	}
+out:
+	EVP_MD_free(md);
+	EVP_MAC_CTX_free(ctx);
+	EVP_MAC_free(hmac);
+
+	return rc;
+}
+
+static int
 nvme_auth_calc_response(struct spdk_key *key, enum spdk_nvmf_auth_hash hash,
 			uint32_t seq, uint16_t tid, uint8_t scc,
 			const char *subnqn, const char *hostnqn, const void *dhkey, size_t dhlen,
@@ -170,11 +253,16 @@ nvme_auth_calc_response(struct spdk_key *key, enum spdk_nvmf_auth_hash hash,
 	EVP_MAC_CTX *ctx;
 	OSSL_PARAM params[2];
 	uint8_t keybuf[NVME_AUTH_CHAP_KEY_MAX_SIZE], term = 0;
+	uint8_t caval[NVME_AUTH_DATA_SIZE];
 	const char *digest;
-	size_t hmaclen;
+	size_t hmaclen, calen = sizeof(caval);
 	int rc, keylen;
 
-	assert(dhkey == NULL && dhlen == 0);
+	rc = nvme_auth_augment_challenge(cval, clen, dhkey, dhlen, caval, &calen, hash);
+	if (rc != 0) {
+		return rc;
+	}
+
 	hmac = EVP_MAC_fetch(NULL, "hmac", NULL);
 	if (hmac == NULL) {
 		SPDK_ERRLOG("Failed to fetch HMAC\n");
@@ -194,22 +282,7 @@ nvme_auth_calc_response(struct spdk_key *key, enum spdk_nvmf_auth_hash hash,
 		goto out;
 	}
 
-	switch (hash) {
-	case SPDK_NVMF_AUTH_HASH_SHA256:
-		digest = "sha256";
-		break;
-	case SPDK_NVMF_AUTH_HASH_SHA384:
-		digest = "sha384";
-		break;
-	case SPDK_NVMF_AUTH_HASH_SHA512:
-		digest = "sha512";
-		break;
-	default:
-		assert(0 && "invalid hash");
-		rc = -EINVAL;
-		goto out;
-	}
-
+	digest = nvme_auth_get_digest_name(hash);
 	params[0] = OSSL_PARAM_construct_utf8_string("digest", (char *)digest, 0);
 	params[1] = OSSL_PARAM_construct_end();
 
@@ -217,7 +290,7 @@ nvme_auth_calc_response(struct spdk_key *key, enum spdk_nvmf_auth_hash hash,
 	if (EVP_MAC_init(ctx, keybuf, (size_t)keylen, params) != 1) {
 		goto out;
 	}
-	if (EVP_MAC_update(ctx, cval, clen) != 1) {
+	if (EVP_MAC_update(ctx, caval, calen) != 1) {
 		goto out;
 	}
 	if (EVP_MAC_update(ctx, (void *)&seq, sizeof(seq)) != 1) {
