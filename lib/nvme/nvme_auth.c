@@ -136,9 +136,14 @@ nvme_auth_set_failure(struct spdk_nvme_qpair *qpair, int status, bool failure2)
 }
 
 static int
-nvme_auth_transform_key(struct spdk_key *key, int hash, const void *keyin, size_t keylen,
-			void *out, size_t outlen)
+nvme_auth_transform_key(struct spdk_key *key, int hash, const char *nqn,
+			const void *keyin, size_t keylen, void *out, size_t outlen)
 {
+	EVP_MAC *hmac = NULL;
+	EVP_MAC_CTX *ctx = NULL;
+	OSSL_PARAM params[2];
+	int rc;
+
 	switch (hash) {
 	case SPDK_NVMF_AUTH_HASH_NONE:
 		if (keylen > outlen) {
@@ -150,16 +155,53 @@ nvme_auth_transform_key(struct spdk_key *key, int hash, const void *keyin, size_
 	case SPDK_NVMF_AUTH_HASH_SHA256:
 	case SPDK_NVMF_AUTH_HASH_SHA384:
 	case SPDK_NVMF_AUTH_HASH_SHA512:
-		SPDK_ERRLOG("Key transformation is not supported\n");
-		return -EINVAL;
+		break;
 	default:
 		SPDK_ERRLOG("Unsupported key %s hash: 0x%x\n", spdk_key_get_name(key), hash);
 		return -EINVAL;
 	}
+
+	hmac = EVP_MAC_fetch(NULL, "hmac", NULL);
+	if (hmac == NULL) {
+		SPDK_ERRLOG("Failed to fetch HMAC\n");
+		return -EIO;
+	}
+	ctx = EVP_MAC_CTX_new(hmac);
+	if (ctx == NULL) {
+		SPDK_ERRLOG("Failed to fetch HMAC ctx\n");
+		rc = -EIO;
+		goto out;
+	}
+	params[0] = OSSL_PARAM_construct_utf8_string("digest",
+						     (char *)nvme_auth_get_digest_name(hash), 0);
+	params[1] = OSSL_PARAM_construct_end();
+
+	if (EVP_MAC_init(ctx, keyin, keylen, params) != 1) {
+		rc = -EIO;
+		goto out;
+	}
+	if (EVP_MAC_update(ctx, nqn, strlen(nqn)) != 1) {
+		rc = -EIO;
+		goto out;
+	}
+	if (EVP_MAC_update(ctx, "NVMe-over-Fabrics", strlen("NVMe-over-Fabrics")) != 1) {
+		rc = -EIO;
+		goto out;
+	}
+	if (EVP_MAC_final(ctx, out, &outlen, outlen) != 1) {
+		rc = -EIO;
+		goto out;
+	}
+	rc = (int)outlen;
+out:
+	EVP_MAC_CTX_free(ctx);
+	EVP_MAC_free(hmac);
+
+	return rc;
 }
 
 static int
-nvme_auth_get_key(struct spdk_key *key, void *buf, size_t buflen)
+nvme_auth_get_key(struct spdk_key *key, const char *nqn, void *buf, size_t buflen)
 {
 	char keystr[NVME_AUTH_CHAP_KEY_MAX_SIZE + 1] = {};
 	char keyb64[NVME_AUTH_CHAP_KEY_MAX_SIZE] = {};
@@ -212,7 +254,7 @@ nvme_auth_get_key(struct spdk_key *key, void *buf, size_t buflen)
 		goto out;
 	}
 
-	rc = nvme_auth_transform_key(key, hash, keyb64, keylen, buf, buflen);
+	rc = nvme_auth_transform_key(key, hash, nqn, keyb64, keylen, buf, buflen);
 out:
 	spdk_memset_s(keystr, sizeof(keystr), 0, sizeof(keystr));
 	spdk_memset_s(keyb64, sizeof(keyb64), 0, sizeof(keyb64));
@@ -319,7 +361,7 @@ nvme_auth_calc_response(struct spdk_key *key, enum spdk_nvmf_auth_hash hash,
 		goto out;
 	}
 
-	keylen = nvme_auth_get_key(key, keybuf, sizeof(keybuf));
+	keylen = nvme_auth_get_key(key, hostnqn, keybuf, sizeof(keybuf));
 	if (keylen < 0) {
 		rc = keylen;
 		goto out;
