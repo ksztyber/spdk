@@ -295,8 +295,20 @@ struct spdk_nvme_ctrlr_opts {
 	 * In-band authentication DH-HMAC-CHAP key.
 	 */
 	struct spdk_key *chap_key;
+
+	/**
+	 * Allowed digests in in-band authentication.  Each bit corresponds to one of the
+	 * spdk_nvmf_auth_hash values.
+	 */
+	uint32_t chap_digests;
+
+	/**
+	 * Allowed Diffie-Hellman groups in in-band authentication.  Each bit corresponds to one of
+	 * the spdk_nvmf_auth_dhgroup values.
+	 */
+	uint32_t chap_dhgroups;
 };
-SPDK_STATIC_ASSERT(sizeof(struct spdk_nvme_ctrlr_opts) == 840, "Incorrect size");
+SPDK_STATIC_ASSERT(sizeof(struct spdk_nvme_ctrlr_opts) == 848, "Incorrect size");
 
 /**
  * NVMe acceleration operation callback.
