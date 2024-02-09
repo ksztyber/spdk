@@ -409,7 +409,7 @@ spdk_json_decode_array(const struct spdk_json_val *values, spdk_json_decode_fn d
 
 	*out_size = 0;
 	field = out;
-	out_end = field + max_size * stride;
+	out_end = max_size != 0 ?  field + max_size * stride : NULL;
 	for (i = 0; i < values->len;) {
 		const struct spdk_json_val *v = &values[i + 1];
 
