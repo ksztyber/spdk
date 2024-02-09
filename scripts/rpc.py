@@ -586,7 +586,9 @@ if __name__ == "__main__":
                                        io_path_stat=args.io_path_stat,
                                        allow_accel_sequence=args.allow_accel_sequence,
                                        rdma_max_cq_size=args.rdma_max_cq_size,
-                                       rdma_cm_event_timeout_ms=args.rdma_cm_event_timeout_ms)
+                                       rdma_cm_event_timeout_ms=args.rdma_cm_event_timeout_ms,
+                                       chap_digests=args.chap_digests,
+                                       chap_dhgroups=args.chap_dhgroups)
 
     p = subparsers.add_parser('bdev_nvme_set_options',
                               help='Set options for the bdev nvme type. This is startup command.')
@@ -671,6 +673,10 @@ if __name__ == "__main__":
                    help='The maximum size of a rdma completion queue. Default: 0 (unlimited)', type=int)
     p.add_argument('--rdma-cm-event-timeout-ms',
                    help='Time to wait for RDMA CM event. Only applicable for RDMA transports.', type=int)
+    p.add_argument('--chap-digests', help='Comma-separated list of allowed DH-HMAC-CHAP digests',
+                   type=lambda d: d.split(','))
+    p.add_argument('--chap-dhgroups', help='Comma-separated list of allowed DH-HMAC-CHAP DH groups',
+                   type=lambda d: d.split(','))
 
     p.set_defaults(func=bdev_nvme_set_options)
 
