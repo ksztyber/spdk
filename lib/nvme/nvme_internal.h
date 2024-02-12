@@ -439,6 +439,10 @@ struct nvme_auth {
 	uint16_t			tid;
 	/* Flags */
 	uint32_t			flags;
+	/* Selected hash */
+	uint8_t				hash;
+	/* Selected Diffie-Hellman group */
+	uint8_t				dhgroup;
 };
 
 struct spdk_nvme_qpair {

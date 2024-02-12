@@ -897,6 +897,8 @@ nvme_auth_send_reply(struct spdk_nvme_qpair *qpair)
 		AUTH_LOGDUMP("dh secret:", dhsec, dhseclen);
 	}
 
+	auth->hash = challenge->hash_id;
+	auth->dhgroup = challenge->dhg_id;
 	AUTH_DEBUGLOG(qpair, "challenge: key=%s, hash=%u, dhg=%u, seq=%u, tid=%u, "
 		      "subnqn=%s, hostnqn=%s, len=%u\n", spdk_key_get_name(ctrlr->opts.chap_key),
 		      challenge->hash_id, challenge->dhg_id, challenge->seqnum, auth->tid,

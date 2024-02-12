@@ -1228,3 +1228,20 @@ spdk_nvme_qpair_get_num_outstanding_reqs(struct spdk_nvme_qpair *qpair)
 {
 	return qpair->num_outstanding_reqs;
 }
+
+void
+spdk_nvme_qpair_get_auth_status(struct spdk_nvme_qpair *qpair,
+				struct spdk_nvme_qpair_auth_status *status)
+{
+	struct nvme_auth *auth = &qpair->auth;
+
+#define SET_FIELD(s, f, v) \
+	if ((s)->size >= offsetof(struct spdk_nvme_qpair_auth_status, f) + sizeof((s)->f)) { \
+		(s)->f = v; \
+	}
+	SET_FIELD(status, authenticated,
+		  (auth->flags & (NVME_QPAIR_AUTH_FLAG_ATR | NVME_QPAIR_AUTH_FLAG_ASCR)) != 0);
+	SET_FIELD(status, hash, auth->hash);
+	SET_FIELD(status, dhgroup, auth->dhgroup);
+#undef SET_FIELD
+}

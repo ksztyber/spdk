@@ -4031,6 +4031,26 @@ const char *spdk_nvme_auth_get_dhgroup_name(int id);
  */
 int spdk_nvme_auth_get_dhgroup_id(const char *name);
 
+struct spdk_nvme_qpair_auth_status {
+	/** Size of this structure */
+	size_t	size;
+	/** Authentication status */
+	bool	authenticated;
+	/** Selected hash function */
+	uint8_t	hash;
+	/** Selected Diffie-Hellman group */
+	uint8_t	dhgroup;
+};
+
+/**
+ * Get the status of in-band authentication of a given qpair.
+ *
+ * \param qpair Queue pair.
+ * \param status Authentication status.
+ */
+void spdk_nvme_qpair_get_auth_status(struct spdk_nvme_qpair *qpair,
+				     struct spdk_nvme_qpair_auth_status *status);
+
 struct ibv_context;
 struct ibv_pd;
 struct ibv_mr;
