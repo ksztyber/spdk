@@ -71,6 +71,8 @@ DEFINE_STUB_V(spdk_bdev_add_io_stat, (struct spdk_bdev_io_stat *total,
 				      struct spdk_bdev_io_stat *add));
 
 DEFINE_STUB_V(spdk_nvme_qpair_set_abort_dnr, (struct spdk_nvme_qpair *qpair, bool dnr));
+DEFINE_STUB_V(spdk_nvme_qpair_get_auth_status, (struct spdk_nvme_qpair *q,
+	      struct spdk_nvme_qpair_auth_status *s));
 DEFINE_STUB(spdk_keyring_get, struct spdk_key *, (const char *name), NULL);
 DEFINE_STUB_V(spdk_keyring_put, (struct spdk_key *k));
 DEFINE_STUB(spdk_key_get_name, const char *, (struct spdk_key *k), NULL);

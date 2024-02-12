@@ -8360,6 +8360,7 @@ nvme_io_path_info_json(struct spdk_json_write_ctx *w, struct nvme_io_path *io_pa
 {
 	struct nvme_ns *nvme_ns = io_path->nvme_ns;
 	struct nvme_ctrlr *nvme_ctrlr = io_path->qpair->ctrlr;
+	struct spdk_nvme_qpair_auth_status status = {};
 	const struct spdk_nvme_ctrlr_data *cdata;
 	const struct spdk_nvme_transport_id *trid;
 	const char *adrfam_str;
@@ -8375,6 +8376,18 @@ nvme_io_path_info_json(struct spdk_json_write_ctx *w, struct nvme_io_path *io_pa
 	spdk_json_write_named_bool(w, "current", io_path->nbdev_ch != NULL &&
 				   io_path == io_path->nbdev_ch->current_io_path);
 	spdk_json_write_named_bool(w, "connected", nvme_qpair_is_connected(io_path->qpair));
+	if (nvme_qpair_is_connected(io_path->qpair)) {
+		status.size = SPDK_SIZEOF(&status, dhgroup);
+		spdk_nvme_qpair_get_auth_status(io_path->qpair->qpair, &status);
+		if (status.authenticated) {
+			spdk_json_write_named_object_begin(w, "auth");
+			spdk_json_write_named_string(w, "hash",
+				spdk_nvme_auth_get_digest_name(status.hash));
+			spdk_json_write_named_string(w, "dhgroup",
+				spdk_nvme_auth_get_dhgroup_name(status.dhgroup));
+			spdk_json_write_object_end(w);
+		}
+	}
 	spdk_json_write_named_bool(w, "accessible", nvme_ns_is_accessible(nvme_ns));
 
 	spdk_json_write_named_object_begin(w, "transport");
