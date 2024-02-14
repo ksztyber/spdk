@@ -118,6 +118,10 @@ if [[ $NET_TYPE == phy ]]; then
 	run_test "nvmf_target_disconnect" $rootdir/test/nvmf/host/target_disconnect.sh "${TEST_ARGS[@]}"
 fi
 
+if ge $(openssl version | cut -d' ' -f2) 3.0; then
+	run_test "nvmf_auth" "$rootdir/test/nvmf/host/auth.sh" "${TEST_ARGS[@]}"
+fi
+
 timing_exit host
 
 trap - SIGINT SIGTERM EXIT
