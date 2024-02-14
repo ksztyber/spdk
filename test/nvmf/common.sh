@@ -686,11 +686,32 @@ clean_kernel_target() {
 	modprobe -r "${modules[@]##*/}" nvmet
 }
 
+format_key() {
+	local key dgst crc
+
+	prefix="$1" key="$2" dgst=$"$3"
+	python - <<- EOF
+		import base64, zlib
+
+		crc = zlib.crc32(b"$key").to_bytes(4, byteorder="little")
+		b64 = base64.b64encode(b"$key" + crc).decode('utf-8')
+		print("$prefix:{:02x}:{}:".format($dgst, b64))
+	EOF
+
+
+	#local key hash crc
+
+	#prefix="$1" key="$2" hash=$(printf "%02d" "$3")
+	#crc=$(python -c "import zlib; print(\"{:x}\".format(zlib.crc32(b\"$key\")))")
+	##crc=$(echo -n "$key" | gzip -1 -c | tail -c8 | head -c4)
+
+	#echo -n "$prefix:$hash:$(base64 -w0 <(echo -n ${key}${crc})):"
+}
+
 format_interchange_psk() {
-	local key hash crc
+	format_key "NVMeTLSkey-1" "$1" "$2"
+}
 
-	key=$1 hash=$(printf "%02d" $2)
-	crc=$(echo -n $key | gzip -1 -c | tail -c8 | head -c 4)
-
-	echo -n "NVMeTLSkey-1:$hash:$(base64 <(echo -n ${key}${crc})):"
+format_chap_key() {
+	format_key "DHHC-1" "$1" "$2"
 }
