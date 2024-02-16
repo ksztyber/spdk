@@ -66,6 +66,20 @@ nvme_auth_get_digest(int id)
 	return NULL;
 }
 
+int
+spdk_nvme_auth_get_digest_id(const char *digest)
+{
+	size_t i;
+
+	for (i = 0; i < SPDK_COUNTOF(g_digests); ++i) {
+		if (strcmp(g_digests[i].name, digest) == 0) {
+			return g_digests[i].id;
+		}
+	}
+
+	return -EINVAL;
+}
+
 const char *
 spdk_nvme_auth_get_digest_name(int id)
 {
@@ -80,6 +94,20 @@ nvme_auth_get_digest_len(int id)
 	const struct nvme_auth_digest *digest = nvme_auth_get_digest(id);
 
 	return digest != NULL ? digest->len : 0;
+}
+
+int
+spdk_nvme_auth_get_dhgroup_id(const char *dhgroup)
+{
+	size_t i;
+
+	for (i = 0; i < SPDK_COUNTOF(g_dhgroups); ++i) {
+		if (strcmp(g_dhgroups[i].name, dhgroup) == 0) {
+			return g_dhgroups[i].id;
+		}
+	}
+
+	return -EINVAL;
 }
 
 const char *
