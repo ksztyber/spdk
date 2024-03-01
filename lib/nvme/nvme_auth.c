@@ -375,8 +375,8 @@ out:
 
 static int
 nvme_auth_calc_response(struct spdk_key *key, enum spdk_nvmf_auth_hash hash,
-			uint32_t seq, uint16_t tid, uint8_t scc,
-			const char *subnqn, const char *hostnqn, const void *dhkey, size_t dhlen,
+			const char *type, uint32_t seq, uint16_t tid, uint8_t scc,
+			const char *nqn1, const char *nqn2, const void *dhkey, size_t dhlen,
 			const void *cval, void *rval)
 {
 	EVP_MAC *hmac;
@@ -404,7 +404,7 @@ nvme_auth_calc_response(struct spdk_key *key, enum spdk_nvmf_auth_hash hash,
 		goto out;
 	}
 
-	keylen = nvme_auth_get_key(key, hostnqn, keybuf, sizeof(keybuf));
+	keylen = nvme_auth_get_key(key, nqn1, keybuf, sizeof(keybuf));
 	if (keylen < 0) {
 		rc = keylen;
 		goto out;
@@ -430,16 +430,16 @@ nvme_auth_calc_response(struct spdk_key *key, enum spdk_nvmf_auth_hash hash,
 	if (EVP_MAC_update(ctx, (void *)&scc, sizeof(scc)) != 1) {
 		goto out;
 	}
-	if (EVP_MAC_update(ctx, (void *)"HostHost", 8) != 1) {
+	if (EVP_MAC_update(ctx, (void *)type, strlen(type)) != 1) {
 		goto out;
 	}
-	if (EVP_MAC_update(ctx, (void *)hostnqn, strlen(hostnqn)) != 1) {
+	if (EVP_MAC_update(ctx, (void *)nqn1, strlen(nqn1)) != 1) {
 		goto out;
 	}
 	if (EVP_MAC_update(ctx, (void *)&term, sizeof(term)) != 1) {
 		goto out;
 	}
-	if (EVP_MAC_update(ctx, (void *)subnqn, strlen(subnqn)) != 1) {
+	if (EVP_MAC_update(ctx, (void *)nqn2, strlen(nqn2)) != 1) {
 		goto out;
 	}
 	if (EVP_MAC_final(ctx, rval, &hlen, hlen) != 1) {
@@ -882,8 +882,8 @@ nvme_auth_send_reply(struct spdk_nvme_qpair *qpair)
 		      ctrlr->trid.subnqn, ctrlr->opts.hostnqn, hl);
 	rc = nvme_auth_calc_response(ctrlr->opts.chap_key,
 				     (enum spdk_nvmf_auth_hash)challenge->hash_id,
-				     challenge->seqnum, auth->tid, 0,
-				     ctrlr->trid.subnqn, ctrlr->opts.hostnqn,
+				     "HostHost", challenge->seqnum, auth->tid, 0,
+				     ctrlr->opts.hostnqn, ctrlr->trid.subnqn,
 				     dhseclen > 0 ? dhsec : NULL, dhseclen,
 				     challenge->cval, response);
 	if (rc != 0) {
