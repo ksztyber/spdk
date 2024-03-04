@@ -18,7 +18,7 @@ subnqn="nqn.2024-02.io.spdk:cnode0"
 hostnqn="nqn.2024-02.io.spdk:host0"
 nvmet_subsys="/sys/kernel/config/nvmet/subsystems/$subnqn"
 nvmet_host="/sys/kernel/config/nvmet/hosts/$hostnqn"
-keys=()
+keys=() ckeys=()
 
 cleanup() {
 	nvmftestfini || :
@@ -41,14 +41,16 @@ nvmet_auth_init() {
 }
 
 nvmet_auth_set_key() {
-	local digest dhgroup keyid key
+	local digest dhgroup keyid key ckey
 
 	digest="$1" dhgroup="$2" keyid="$3"
 	key=$(< "${keys[keyid]}")
+	ckey=${ckeys[keyid]:+$(< ${ckeys[keyid]})}
 
 	echo "hmac($digest)" > "$nvmet_host/dhchap_hash"
 	echo "$dhgroup" > "$nvmet_host/dhchap_dhgroup"
 	echo "$key" > "$nvmet_host/dhchap_key"
+	[[ -z "$ckey" ]] || echo "$ckey" > "$nvmet_host/dhchap_ctrl_key"
 }
 
 gen_key() {
@@ -65,13 +67,15 @@ gen_key() {
 }
 
 connect_authenticate() {
-	local digest dhgroup keyid
+	local digest dhgroup keyid ckey
 
 	digest="$1" dhgroup="$2" keyid="$3"
+	ckey=(${ckeys[keyid]:+--chap-ctrlr-key "ckey${keyid}"})
+
 	rpc_cmd bdev_nvme_set_options --chap-digests "$digest" --chap-dhgroups "$dhgroup"
 	rpc_cmd bdev_nvme_attach_controller -b nvme0 -t "$TEST_TRANSPORT" -f ipv4 \
 		-a "$(get_main_ns_ip)" -s "$NVMF_PORT" -q "$hostnqn" -n "$subnqn" \
-		--chap-key "key${keyid}"
+		--chap-key "key${keyid}" "${ckey[@]}"
 	[[ $(rpc_cmd bdev_nvme_get_controllers | jq -r '.[].name') == "nvme0" ]]
 	rpc_cmd bdev_nvme_detach_controller nvme0
 }
@@ -81,15 +85,17 @@ nvmfappstart -L nvme_auth
 
 trap cleanup SIGINT SIGTERM EXIT
 
-keys[0]=$(gen_key "null" 32)
-keys[1]=$(gen_key "null" 48)
-keys[2]=$(gen_key "sha256" 32)
-keys[3]=$(gen_key "sha384" 48)
-keys[4]=$(gen_key "sha512" 64)
+# Set host/ctrlr key pairs with one combination w/o bidirectional authentication
+keys[0]=$(gen_key "null" 32) ckeys[0]=$(gen_key "sha512" 64)
+keys[1]=$(gen_key "null" 48) ckeys[1]=$(gen_key "sha384" 48)
+keys[2]=$(gen_key "sha256" 32) ckeys[2]=$(gen_key "sha256" 32)
+keys[3]=$(gen_key "sha384" 48) ckeys[3]=$(gen_key "null" 32)
+keys[4]=$(gen_key "sha512" 64) ckeys[4]=""
 
 waitforlisten "$nvmfpid"
 for i in "${!keys[@]}"; do
 	rpc_cmd keyring_file_add_key "key$i" "${keys[i]}"
+	[[ -n "${ckeys[i]}" ]] && rpc_cmd keyring_file_add_key "ckey$i" "${ckeys[i]}"
 done
 
 nvmet_auth_init
@@ -128,3 +134,8 @@ NOT rpc_cmd bdev_nvme_attach_controller -b nvme0 -t "$TEST_TRANSPORT" -f ipv4 \
 	-a "$(get_main_ns_ip)" -s "$NVMF_PORT" -q "$hostnqn" -n "$subnqn" \
 	--chap-key "key2"
 (($(rpc_cmd bdev_nvme_get_controllers | jq 'length') == 0))
+
+# Check that a failed controller authentication results in failed attach
+NOT rpc_cmd bdev_nvme_attach_controller -b nvme0 -t "$TEST_TRANSPORT" -f ipv4 \
+	-a "$(get_main_ns_ip)" -s "$NVMF_PORT" -q "$hostnqn" -n "$subnqn" \
+	--chap-key "key1" --chap-ctrlr-key "ckey2"
