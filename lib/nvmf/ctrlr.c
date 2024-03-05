@@ -257,6 +257,8 @@ ctrlr_add_qpair_and_send_rsp(struct spdk_nvmf_qpair *qpair,
 		return;
 	}
 
+	assert(qpair->state == SPDK_NVMF_QPAIR_CONNECTING);
+	nvmf_qpair_set_state(qpair, SPDK_NVMF_QPAIR_ENABLED);
 	qpair->ctrlr = ctrlr;
 	spdk_bit_array_set(ctrlr->qpair_mask, qpair->qid);
 

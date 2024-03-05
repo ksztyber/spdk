@@ -215,6 +215,12 @@ DEFINE_STUB(spdk_nvme_ns_get_format_index, uint32_t,
 
 DEFINE_STUB(spdk_nvmf_subsystem_is_discovery, bool, (struct spdk_nvmf_subsystem *subsystem), false);
 
+void
+nvmf_qpair_set_state(struct spdk_nvmf_qpair *qpair, enum spdk_nvmf_qpair_state state)
+{
+	qpair->state = state;
+}
+
 int
 spdk_nvmf_qpair_disconnect(struct spdk_nvmf_qpair *qpair, nvmf_qpair_disconnect_cb cb_fn, void *ctx)
 {
@@ -444,7 +450,7 @@ test_connect(void)
 
 	memset(&admin_qpair, 0, sizeof(admin_qpair));
 	admin_qpair.group = &group;
-	admin_qpair.state = SPDK_NVMF_QPAIR_ENABLED;
+	admin_qpair.state = SPDK_NVMF_QPAIR_CONNECTING;
 
 	memset(&tgt, 0, sizeof(tgt));
 	memset(&transport, 0, sizeof(transport));
@@ -457,7 +463,7 @@ test_connect(void)
 	memset(&qpair, 0, sizeof(qpair));
 	qpair.transport = &transport;
 	qpair.group = &group;
-	qpair.state = SPDK_NVMF_QPAIR_ENABLED;
+	qpair.state = SPDK_NVMF_QPAIR_CONNECTING;
 	TAILQ_INIT(&qpair.outstanding);
 
 	memset(&connect_data, 0, sizeof(connect_data));
@@ -508,9 +514,11 @@ test_connect(void)
 	CU_ASSERT(rc == SPDK_NVMF_REQUEST_EXEC_STATUS_ASYNCHRONOUS);
 	CU_ASSERT(nvme_status_success(&rsp.nvme_cpl.status));
 	CU_ASSERT(qpair.ctrlr != NULL);
+	CU_ASSERT(qpair.state == SPDK_NVMF_QPAIR_ENABLED);
 	CU_ASSERT(sgroups[subsystem.id].mgmt_io_outstanding == 0);
 	nvmf_ctrlr_stop_keep_alive_timer(qpair.ctrlr);
 	spdk_bit_array_free(&qpair.ctrlr->qpair_mask);
+	qpair.state = SPDK_NVMF_QPAIR_CONNECTING;
 	free(qpair.ctrlr);
 	qpair.ctrlr = NULL;
 
@@ -524,8 +532,10 @@ test_connect(void)
 	CU_ASSERT(rc == SPDK_NVMF_REQUEST_EXEC_STATUS_ASYNCHRONOUS);
 	CU_ASSERT(nvme_status_success(&rsp.nvme_cpl.status));
 	CU_ASSERT(qpair.ctrlr != NULL && qpair.ctrlr->keep_alive_poller == NULL);
+	CU_ASSERT(qpair.state == SPDK_NVMF_QPAIR_ENABLED);
 	CU_ASSERT(sgroups[subsystem.id].mgmt_io_outstanding == 0);
 	spdk_bit_array_free(&qpair.ctrlr->qpair_mask);
+	qpair.state = SPDK_NVMF_QPAIR_CONNECTING;
 	free(qpair.ctrlr);
 	qpair.ctrlr = NULL;
 	cmd.connect_cmd.kato = 120000;
@@ -666,9 +676,11 @@ test_connect(void)
 	poll_threads();
 	CU_ASSERT(rc == SPDK_NVMF_REQUEST_EXEC_STATUS_ASYNCHRONOUS);
 	CU_ASSERT(nvme_status_success(&rsp.nvme_cpl.status));
+	CU_ASSERT(qpair.state == SPDK_NVMF_QPAIR_ENABLED);
 	CU_ASSERT(qpair.ctrlr == &ctrlr);
 	CU_ASSERT(sgroups[subsystem.id].mgmt_io_outstanding == 0);
 	qpair.ctrlr = NULL;
+	qpair.state = SPDK_NVMF_QPAIR_CONNECTING;
 	cmd.connect_cmd.sqsize = 31;
 
 	/* Non-existent controller */
@@ -717,11 +729,13 @@ test_connect(void)
 	poll_threads();
 	CU_ASSERT(rc == SPDK_NVMF_REQUEST_EXEC_STATUS_ASYNCHRONOUS);
 	CU_ASSERT(nvme_status_success(&rsp.nvme_cpl.status));
+	CU_ASSERT(qpair.state == SPDK_NVMF_QPAIR_ENABLED);
 	CU_ASSERT(qpair.ctrlr != NULL);
 	CU_ASSERT(qpair.ctrlr->keep_alive_poller != NULL);
 	CU_ASSERT(sgroups[subsystem.id].mgmt_io_outstanding == 0);
 	nvmf_ctrlr_stop_keep_alive_timer(qpair.ctrlr);
 	spdk_bit_array_free(&qpair.ctrlr->qpair_mask);
+	qpair.state = SPDK_NVMF_QPAIR_CONNECTING;
 	free(qpair.ctrlr);
 	qpair.ctrlr = NULL;
 
@@ -739,11 +753,13 @@ test_connect(void)
 	poll_threads();
 	CU_ASSERT(rc == SPDK_NVMF_REQUEST_EXEC_STATUS_ASYNCHRONOUS);
 	CU_ASSERT(nvme_status_success(&rsp.nvme_cpl.status));
+	CU_ASSERT(qpair.state == SPDK_NVMF_QPAIR_ENABLED);
 	CU_ASSERT(qpair.ctrlr != NULL);
 	CU_ASSERT(qpair.ctrlr->keep_alive_poller != NULL);
 	CU_ASSERT(sgroups[subsystem.id].mgmt_io_outstanding == 0);
 	nvmf_ctrlr_stop_keep_alive_timer(qpair.ctrlr);
 	spdk_bit_array_free(&qpair.ctrlr->qpair_mask);
+	qpair.state = SPDK_NVMF_QPAIR_CONNECTING;
 	free(qpair.ctrlr);
 	qpair.ctrlr = NULL;
 	cmd.connect_cmd.qid = 1;
@@ -855,8 +871,10 @@ test_connect(void)
 	spdk_delay_us(DUPLICATE_QID_RETRY_US * 2);
 	poll_threads();
 	CU_ASSERT(nvme_status_success(&rsp.nvme_cpl.status));
+	CU_ASSERT(qpair.state == SPDK_NVMF_QPAIR_ENABLED);
 	CU_ASSERT(qpair.ctrlr == &ctrlr);
 	CU_ASSERT(sgroups[subsystem.id].mgmt_io_outstanding == 0);
+	qpair.state = SPDK_NVMF_QPAIR_CONNECTING;
 	qpair.ctrlr = NULL;
 
 	/* I/O connect when admin qpair is being destroyed */
@@ -872,7 +890,7 @@ test_connect(void)
 	CU_ASSERT(qpair.ctrlr == NULL);
 	CU_ASSERT(sgroups[subsystem.id].mgmt_io_outstanding == 0);
 	admin_qpair.group = &group;
-	admin_qpair.state = SPDK_NVMF_QPAIR_ENABLED;
+	admin_qpair.state = SPDK_NVMF_QPAIR_CONNECTING;
 
 	/* I/O connect when admin qpair was destroyed */
 	ctrlr.admin_qpair = NULL;
@@ -2421,7 +2439,7 @@ test_nvmf_ctrlr_create_destruct(void)
 	transport.tgt = &tgt;
 	qpair.transport = &transport;
 	qpair.group = &group;
-	qpair.state = SPDK_NVMF_QPAIR_ENABLED;
+	qpair.state = SPDK_NVMF_QPAIR_CONNECTING;
 	TAILQ_INIT(&qpair.outstanding);
 
 	memcpy(connect_data.hostid, hostid, sizeof(hostid));
