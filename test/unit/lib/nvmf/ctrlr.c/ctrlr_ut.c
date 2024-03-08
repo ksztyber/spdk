@@ -444,7 +444,7 @@ test_connect(void)
 
 	memset(&admin_qpair, 0, sizeof(admin_qpair));
 	admin_qpair.group = &group;
-	admin_qpair.state = SPDK_NVMF_QPAIR_ACTIVE;
+	admin_qpair.state = SPDK_NVMF_QPAIR_ENABLED;
 
 	memset(&tgt, 0, sizeof(tgt));
 	memset(&transport, 0, sizeof(transport));
@@ -457,7 +457,7 @@ test_connect(void)
 	memset(&qpair, 0, sizeof(qpair));
 	qpair.transport = &transport;
 	qpair.group = &group;
-	qpair.state = SPDK_NVMF_QPAIR_ACTIVE;
+	qpair.state = SPDK_NVMF_QPAIR_ENABLED;
 	TAILQ_INIT(&qpair.outstanding);
 
 	memset(&connect_data, 0, sizeof(connect_data));
@@ -872,7 +872,7 @@ test_connect(void)
 	CU_ASSERT(qpair.ctrlr == NULL);
 	CU_ASSERT(sgroups[subsystem.id].mgmt_io_outstanding == 0);
 	admin_qpair.group = &group;
-	admin_qpair.state = SPDK_NVMF_QPAIR_ACTIVE;
+	admin_qpair.state = SPDK_NVMF_QPAIR_ENABLED;
 
 	/* I/O connect when admin qpair was destroyed */
 	ctrlr.admin_qpair = NULL;
@@ -1587,7 +1587,7 @@ test_reservation_notification_log_page(void)
 	req.qpair = &qpair;
 	TAILQ_INIT(&qpair.outstanding);
 	qpair.ctrlr = NULL;
-	qpair.state = SPDK_NVMF_QPAIR_ACTIVE;
+	qpair.state = SPDK_NVMF_QPAIR_ENABLED;
 	TAILQ_INSERT_TAIL(&qpair.outstanding, &req, link);
 
 	nvmf_ctrlr_reservation_notice_log(&ctrlr, &ns,
@@ -1646,7 +1646,7 @@ test_get_dif_ctx(void)
 	ret = spdk_nvmf_request_get_dif_ctx(&req, &dif_ctx);
 	CU_ASSERT(ret == false);
 
-	qpair.state = SPDK_NVMF_QPAIR_ACTIVE;
+	qpair.state = SPDK_NVMF_QPAIR_ENABLED;
 	cmd.nvmf_cmd.opcode = SPDK_NVME_OPC_FABRIC;
 
 	ret = spdk_nvmf_request_get_dif_ctx(&req, &dif_ctx);
@@ -1912,7 +1912,7 @@ test_fused_compare_and_write(void)
 	qpair.ctrlr = &ctrlr;
 	qpair.group = &group;
 	qpair.qid = 1;
-	qpair.state = SPDK_NVMF_QPAIR_ACTIVE;
+	qpair.state = SPDK_NVMF_QPAIR_ENABLED;
 
 	cmd.nsid = 1;
 
@@ -2421,7 +2421,7 @@ test_nvmf_ctrlr_create_destruct(void)
 	transport.tgt = &tgt;
 	qpair.transport = &transport;
 	qpair.group = &group;
-	qpair.state = SPDK_NVMF_QPAIR_ACTIVE;
+	qpair.state = SPDK_NVMF_QPAIR_ENABLED;
 	TAILQ_INIT(&qpair.outstanding);
 
 	memcpy(connect_data.hostid, hostid, sizeof(hostid));
@@ -2529,7 +2529,7 @@ test_nvmf_ctrlr_use_zcopy(void)
 	qpair.ctrlr = &ctrlr;
 	qpair.group = &group;
 	qpair.qid = 1;
-	qpair.state = SPDK_NVMF_QPAIR_ACTIVE;
+	qpair.state = SPDK_NVMF_QPAIR_ENABLED;
 	qpair.transport = &transport;
 
 	group.thread = spdk_get_thread();
@@ -2645,7 +2645,7 @@ test_spdk_nvmf_request_zcopy_start(void)
 	qpair.group = &group;
 	qpair.transport = &transport;
 	qpair.qid = 1;
-	qpair.state = SPDK_NVMF_QPAIR_ACTIVE;
+	qpair.state = SPDK_NVMF_QPAIR_ENABLED;
 
 	cmd.nsid = 1;
 
@@ -2706,7 +2706,7 @@ test_spdk_nvmf_request_zcopy_start(void)
 	qpair.state_cb = qpair_state_change_done;
 	spdk_nvmf_request_zcopy_start(&req);
 	CU_ASSERT(req.zcopy_phase == NVMF_ZCOPY_PHASE_INIT_FAILED);
-	qpair.state = SPDK_NVMF_QPAIR_ACTIVE;
+	qpair.state = SPDK_NVMF_QPAIR_ENABLED;
 	qpair.state_cb = NULL;
 	req.zcopy_phase = NVMF_ZCOPY_PHASE_NONE;
 
@@ -2783,7 +2783,7 @@ test_zcopy_read(void)
 	qpair.group = &group;
 	qpair.transport = &transport;
 	qpair.qid = 1;
-	qpair.state = SPDK_NVMF_QPAIR_ACTIVE;
+	qpair.state = SPDK_NVMF_QPAIR_ENABLED;
 
 	cmd.nsid = 1;
 
@@ -2869,7 +2869,7 @@ test_zcopy_write(void)
 	qpair.group = &group;
 	qpair.transport = &transport;
 	qpair.qid = 1;
-	qpair.state = SPDK_NVMF_QPAIR_ACTIVE;
+	qpair.state = SPDK_NVMF_QPAIR_ENABLED;
 
 	cmd.nsid = 1;
 

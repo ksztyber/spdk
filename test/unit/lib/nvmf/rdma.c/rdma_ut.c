@@ -494,7 +494,7 @@ qpair_reset(struct spdk_nvmf_rdma_qpair *rqpair,
 	rqpair->resources = resources;
 	rqpair->qpair.qid = 1;
 	rqpair->ibv_state = IBV_QPS_RTS;
-	rqpair->qpair.state = SPDK_NVMF_QPAIR_ACTIVE;
+	rqpair->qpair.state = SPDK_NVMF_QPAIR_ENABLED;
 	rqpair->max_send_sge = SPDK_NVMF_MAX_SGL_ENTRIES;
 	rqpair->max_send_depth = 16;
 	rqpair->max_read_depth = 16;
