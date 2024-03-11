@@ -390,11 +390,13 @@ static void
 test_process_fabrics_cmd(void)
 {
 	struct	spdk_nvmf_request req = {};
-	int	ret;
+	bool	ret;
 	struct	spdk_nvmf_qpair req_qpair = {};
 	union	nvmf_h2c_msg  req_cmd = {};
 	union	nvmf_c2h_msg   req_rsp = {};
 
+	TAILQ_INIT(&req_qpair.outstanding);
+	req_qpair.state = SPDK_NVMF_QPAIR_CONNECTING;
 	req.qpair = &req_qpair;
 	req.cmd  = &req_cmd;
 	req.rsp  = &req_rsp;
@@ -402,9 +404,10 @@ test_process_fabrics_cmd(void)
 
 	/* No ctrlr and invalid command check */
 	req.cmd->nvmf_cmd.fctype = SPDK_NVMF_FABRIC_COMMAND_PROPERTY_GET;
-	ret = nvmf_ctrlr_process_fabrics_cmd(&req);
+	ret = nvmf_check_qpair_active(&req);
+	CU_ASSERT_EQUAL(req.rsp->nvme_cpl.status.sct, SPDK_NVME_SCT_GENERIC);
 	CU_ASSERT_EQUAL(req.rsp->nvme_cpl.status.sc, SPDK_NVME_SC_COMMAND_SEQUENCE_ERROR);
-	CU_ASSERT_EQUAL(ret, SPDK_NVMF_REQUEST_EXEC_STATUS_COMPLETE);
+	CU_ASSERT(ret == false);
 }
 
 static bool
@@ -2676,11 +2679,13 @@ test_spdk_nvmf_request_zcopy_start(void)
 	/* Fail because no controller */
 	CU_ASSERT(nvmf_ctrlr_use_zcopy(&req));
 	CU_ASSERT(req.zcopy_phase == NVMF_ZCOPY_PHASE_INIT);
+	qpair.state = SPDK_NVMF_QPAIR_CONNECTING;
 	qpair.ctrlr = NULL;
 	spdk_nvmf_request_zcopy_start(&req);
 	CU_ASSERT_EQUAL(req.zcopy_phase, NVMF_ZCOPY_PHASE_INIT_FAILED);
 	CU_ASSERT_EQUAL(rsp.nvme_cpl.status.sct, SPDK_NVME_SCT_GENERIC);
 	CU_ASSERT_EQUAL(rsp.nvme_cpl.status.sc, SPDK_NVME_SC_COMMAND_SEQUENCE_ERROR);
+	qpair.state = SPDK_NVMF_QPAIR_ENABLED;
 	qpair.ctrlr = &ctrlr;
 	req.zcopy_phase = NVMF_ZCOPY_PHASE_NONE;
 
