@@ -32,6 +32,7 @@
 	spdk_nvmf_subsystem_get_first;
 	spdk_nvmf_subsystem_get_next;
 	spdk_nvmf_subsystem_add_host;
+	spdk_nvmf_subsystem_add_host_ext;
 	spdk_nvmf_subsystem_remove_host;
 	spdk_nvmf_subsystem_disconnect_host;
 	spdk_nvmf_subsystem_set_allow_any_host;
