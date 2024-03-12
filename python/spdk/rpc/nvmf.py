@@ -521,7 +521,7 @@ def nvmf_subsystem_remove_ns(client, nqn, nsid, tgt_name=None):
     return client.call('nvmf_subsystem_remove_ns', params)
 
 
-def nvmf_subsystem_add_host(client, nqn, host, tgt_name=None, psk=None):
+def nvmf_subsystem_add_host(client, nqn, host, tgt_name=None, psk=None, chap_key=None):
     """Add a host NQN to the list of allowed hosts.
 
     Args:
@@ -529,6 +529,7 @@ def nvmf_subsystem_add_host(client, nqn, host, tgt_name=None, psk=None):
         host: Host NQN to add to the list of allowed host NQNs
         tgt_name: name of the parent NVMe-oF target (optional)
         psk: PSK file path for TLS.
+        chap_key: DH-HMAC-CHAP key.
 
     Returns:
         True or False
@@ -540,6 +541,8 @@ def nvmf_subsystem_add_host(client, nqn, host, tgt_name=None, psk=None):
         params['tgt_name'] = tgt_name
     if psk:
         params['psk'] = psk
+    if chap_key is not None:
+        params['chap_key'] = chap_key
 
     return client.call('nvmf_subsystem_add_host', params)
 

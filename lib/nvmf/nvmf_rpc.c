@@ -199,6 +199,10 @@ dump_nvmf_subsystem(struct spdk_json_write_ctx *w, struct spdk_nvmf_subsystem *s
 	     host = spdk_nvmf_subsystem_get_next_host(subsystem, host)) {
 		spdk_json_write_object_begin(w);
 		spdk_json_write_named_string(w, "nqn", spdk_nvmf_host_get_nqn(host));
+		if (host->chap_key != NULL) {
+			spdk_json_write_named_string(w, "chap_key",
+						     spdk_key_get_name(host->chap_key));
+		}
 		spdk_json_write_object_end(w);
 	}
 	spdk_json_write_array_end(w);
@@ -1706,6 +1710,7 @@ struct nvmf_rpc_host_ctx {
 	char *nqn;
 	char *host;
 	char *tgt_name;
+	char *chap_key;
 	bool allow_any_host;
 };
 
@@ -1713,6 +1718,7 @@ static const struct spdk_json_object_decoder nvmf_rpc_subsystem_host_decoder[] =
 	{"nqn", offsetof(struct nvmf_rpc_host_ctx, nqn), spdk_json_decode_string},
 	{"host", offsetof(struct nvmf_rpc_host_ctx, host), spdk_json_decode_string},
 	{"tgt_name", offsetof(struct nvmf_rpc_host_ctx, tgt_name), spdk_json_decode_string, true},
+	{"chap_key", offsetof(struct nvmf_rpc_host_ctx, chap_key), spdk_json_decode_string, true},
 };
 
 static void
@@ -1721,6 +1727,7 @@ nvmf_rpc_host_ctx_free(struct nvmf_rpc_host_ctx *ctx)
 	free(ctx->nqn);
 	free(ctx->host);
 	free(ctx->tgt_name);
+	free(ctx->chap_key);
 }
 
 static void
@@ -1729,7 +1736,9 @@ rpc_nvmf_subsystem_add_host(struct spdk_jsonrpc_request *request,
 {
 	struct nvmf_rpc_host_ctx ctx = {};
 	struct spdk_nvmf_subsystem *subsystem;
+	struct spdk_nvmf_host_opts opts = {};
 	struct spdk_nvmf_tgt *tgt;
+	struct spdk_key *key = NULL;
 	int rc;
 
 	if (spdk_json_decode_object_relaxed(params, nvmf_rpc_subsystem_host_decoder,
@@ -1758,13 +1767,30 @@ rpc_nvmf_subsystem_add_host(struct spdk_jsonrpc_request *request,
 		return;
 	}
 
-	rc = spdk_nvmf_subsystem_add_host(subsystem, ctx.host, params);
+	if (ctx.chap_key != NULL) {
+		key = spdk_keyring_get_key(ctx.chap_key);
+		if (key == NULL) {
+			SPDK_ERRLOG("Unable to find DH-HMAC-CHAP key: %s\n", ctx.chap_key);
+			spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
+							 "Invalid parameters");
+			nvmf_rpc_host_ctx_free(&ctx);
+			return;
+		}
+	}
+
+	opts.size = SPDK_SIZEOF(&opts, params);
+	opts.hostnqn = ctx.host;
+	opts.params = params;
+	opts.chap_key = key;
+	rc = spdk_nvmf_subsystem_add_host_ext(subsystem, &opts);
 	if (rc != 0) {
 		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR, "Internal error");
 		nvmf_rpc_host_ctx_free(&ctx);
+		spdk_keyring_put_key(key);
 		return;
 	}
 
+	spdk_keyring_put_key(key);
 	spdk_jsonrpc_send_bool_response(request, true);
 	nvmf_rpc_host_ctx_free(&ctx);
 }

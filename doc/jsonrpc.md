@@ -8434,6 +8434,7 @@ nqn                     | Required | string      | Subsystem NQN
 host                    | Required | string      | Host NQN to add to the list of allowed host NQNs
 tgt_name                | Optional | string      | Parent NVMe-oF target name.
 psk                     | Optional | string      | Path to a file containing PSK for TLS connection
+chap_key                | Optional | string      | DH-HMAC-CHAP key.
 
 #### Example
 
@@ -8446,7 +8447,8 @@ Example request:
   "method": "nvmf_subsystem_add_host",
   "params": {
     "nqn": "nqn.2016-06.io.spdk:cnode1",
-    "host": "nqn.2016-06.io.spdk:host1"
+    "host": "nqn.2016-06.io.spdk:host1",
+    "chap_key": "key0"
   }
 }
 ~~~

@@ -312,6 +312,7 @@ spdk_nvmf_subsystem_create(struct spdk_nvmf_tgt *tgt,
 static void
 nvmf_subsystem_remove_host(struct spdk_nvmf_subsystem *subsystem, struct spdk_nvmf_host *host)
 {
+	spdk_keyring_put_key(host->chap_key);
 	TAILQ_REMOVE(&subsystem->hosts, host, link);
 	free(host);
 }
@@ -802,6 +803,7 @@ spdk_nvmf_subsystem_add_host_ext(struct spdk_nvmf_subsystem *subsystem,
 {
 	struct spdk_nvmf_host *host;
 	struct spdk_nvmf_transport *transport;
+	struct spdk_key *key;
 	const char *hostnqn;
 	int rc;
 
@@ -822,6 +824,16 @@ spdk_nvmf_subsystem_add_host_ext(struct spdk_nvmf_subsystem *subsystem,
 	if (!host) {
 		pthread_mutex_unlock(&subsystem->mutex);
 		return -ENOMEM;
+	}
+
+	key = spdk_get_field(opts, chap_key, NULL);
+	if (key != NULL) {
+		host->chap_key = spdk_key_dup(key);
+		if (host->chap_key == NULL) {
+			pthread_mutex_unlock(&subsystem->mutex);
+			free(host);
+			return -ENOMEM;
+		}
 	}
 
 	snprintf(host->nqn, sizeof(host->nqn), "%s", hostnqn);

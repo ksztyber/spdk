@@ -568,6 +568,8 @@ struct spdk_nvmf_host_opts {
 	size_t				size;
 	/** Host's NQN */
 	const char			*hostnqn;
+	/** DH-HMAC-CHAP key */
+	struct spdk_key			*chap_key;
 	/** Transport specific parameters */
 	const struct spdk_json_val	*params;
 };

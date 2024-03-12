@@ -80,6 +80,8 @@ DEFINE_STUB(spdk_bdev_is_zoned, bool, (const struct spdk_bdev *bdev), false);
 
 DEFINE_STUB(spdk_bdev_get_max_zone_append_size, uint32_t,
 	    (const struct spdk_bdev *bdev), 0);
+DEFINE_STUB(spdk_key_dup, struct spdk_key *, (struct spdk_key *k), NULL);
+DEFINE_STUB_V(spdk_keyring_put_key, (struct spdk_key *k));
 
 const char *
 spdk_bdev_get_name(const struct spdk_bdev *bdev)
