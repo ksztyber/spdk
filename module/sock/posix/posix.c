@@ -1973,7 +1973,7 @@ posix_sock_group_impl_remove_sock(struct spdk_sock_group_impl *_group, struct sp
 		errno = event.data;
 	}
 #endif
-
+	_sock_flush(_sock);
 	spdk_sock_abort_requests(_sock);
 
 	return rc;
