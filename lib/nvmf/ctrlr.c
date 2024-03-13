@@ -224,6 +224,7 @@ ctrlr_add_qpair_and_send_rsp(struct spdk_nvmf_qpair *qpair,
 			     struct spdk_nvmf_request *req)
 {
 	struct spdk_nvmf_fabric_connect_rsp *rsp = &req->rsp->connect_rsp;
+	int rc;
 
 	if (!ctrlr->admin_qpair) {
 		SPDK_ERRLOG("Inactive admin qpair\n");
@@ -258,7 +259,17 @@ ctrlr_add_qpair_and_send_rsp(struct spdk_nvmf_qpair *qpair,
 	}
 
 	assert(qpair->state == SPDK_NVMF_QPAIR_CONNECTING);
-	nvmf_qpair_set_state(qpair, SPDK_NVMF_QPAIR_ENABLED);
+	if (nvmf_subsystem_host_auth_required(ctrlr->subsys, ctrlr->hostnqn)) {
+		rc = nvmf_qpair_auth_init(qpair);
+		if (rc != 0) {
+			spdk_nvmf_qpair_disconnect(qpair, NULL, NULL);
+			return;
+		}
+		rsp->status_code_specific.success.authreq.atr = 1;
+		nvmf_qpair_set_state(qpair, SPDK_NVMF_QPAIR_AUTHENTICATING);
+	} else {
+		nvmf_qpair_set_state(qpair, SPDK_NVMF_QPAIR_ENABLED);
+	}
 	qpair->ctrlr = ctrlr;
 	spdk_bit_array_set(ctrlr->qpair_mask, qpair->qid);
 
@@ -3718,6 +3729,10 @@ nvmf_ctrlr_process_fabrics_cmd(struct spdk_nvmf_request *req)
 			return nvmf_property_set(req);
 		case SPDK_NVMF_FABRIC_COMMAND_PROPERTY_GET:
 			return nvmf_property_get(req);
+		case SPDK_NVMF_FABRIC_COMMAND_AUTHENTICATION_SEND:
+		case SPDK_NVMF_FABRIC_COMMAND_AUTHENTICATION_RECV:
+			nvmf_auth_request_exec(req);
+			return SPDK_NVMF_REQUEST_EXEC_STATUS_ASYNCHRONOUS;
 		default:
 			SPDK_DEBUGLOG(nvmf, "unknown fctype 0x%02x\n",
 				      cap_hdr->fctype);
@@ -3726,12 +3741,21 @@ nvmf_ctrlr_process_fabrics_cmd(struct spdk_nvmf_request *req)
 			return SPDK_NVMF_REQUEST_EXEC_STATUS_COMPLETE;
 		}
 	} else {
-		/* Controller session is established, and this is an I/O queue */
-		/* For now, no I/O-specific Fabrics commands are implemented (other than Connect) */
-		SPDK_DEBUGLOG(nvmf, "Unexpected I/O fctype 0x%x\n", cap_hdr->fctype);
-		req->rsp->nvme_cpl.status.sct = SPDK_NVME_SCT_GENERIC;
-		req->rsp->nvme_cpl.status.sc = SPDK_NVME_SC_INVALID_OPCODE;
-		return SPDK_NVMF_REQUEST_EXEC_STATUS_COMPLETE;
+		/*
+		 * Controller session is established, and this is an I/O queue.
+		 * Disallow everything besides authentication commands.
+		 */
+		switch (cap_hdr->fctype) {
+		case SPDK_NVMF_FABRIC_COMMAND_AUTHENTICATION_SEND:
+		case SPDK_NVMF_FABRIC_COMMAND_AUTHENTICATION_RECV:
+			nvmf_auth_request_exec(req);
+			return SPDK_NVMF_REQUEST_EXEC_STATUS_ASYNCHRONOUS;
+		default:
+			SPDK_DEBUGLOG(nvmf, "Unexpected I/O fctype 0x%x\n", cap_hdr->fctype);
+			req->rsp->nvme_cpl.status.sct = SPDK_NVME_SCT_GENERIC;
+			req->rsp->nvme_cpl.status.sc = SPDK_NVME_SC_INVALID_OPCODE;
+			return SPDK_NVMF_REQUEST_EXEC_STATUS_COMPLETE;
+		}
 	}
 }
 
@@ -4582,10 +4606,14 @@ static bool
 nvmf_check_qpair_active(struct spdk_nvmf_request *req)
 {
 	struct spdk_nvmf_qpair *qpair = req->qpair;
+	int sc, sct;
 
 	if (spdk_likely(qpair->state == SPDK_NVMF_QPAIR_ENABLED)) {
 		return true;
 	}
+
+	sct = SPDK_NVME_SCT_GENERIC;
+	sc = SPDK_NVME_SC_COMMAND_SEQUENCE_ERROR;
 
 	switch(qpair->state) {
 	case SPDK_NVMF_QPAIR_CONNECTING:
@@ -4600,12 +4628,27 @@ nvmf_check_qpair_active(struct spdk_nvmf_request *req)
 			break;
 		}
 		return true;
+	case SPDK_NVMF_QPAIR_AUTHENTICATING:
+		sct = SPDK_NVME_SCT_COMMAND_SPECIFIC;
+		sc = SPDK_NVMF_FABRIC_SC_AUTH_REQUIRED;
+		if (req->cmd->nvmf_cmd.opcode != SPDK_NVME_OPC_FABRIC) {
+			SPDK_ERRLOG("Received command 0x%x on qid %u before authentication\n",
+				    req->cmd->nvmf_cmd.opcode, qpair->qid);
+			break;
+		}
+		if (req->cmd->nvmf_cmd.fctype != SPDK_NVMF_FABRIC_COMMAND_AUTHENTICATION_SEND &&
+		    req->cmd->nvmf_cmd.fctype != SPDK_NVMF_FABRIC_COMMAND_AUTHENTICATION_RECV) {
+			SPDK_ERRLOG("Received fctype 0x%x on qid %u before authentication\n",
+				    req->cmd->nvmf_cmd.fctype, qpair->qid);
+			break;
+		}
+		return true;
 	default:
 		break;
 	}
 
-	req->rsp->nvme_cpl.status.sct = SPDK_NVME_SCT_GENERIC;
-	req->rsp->nvme_cpl.status.sc = SPDK_NVME_SC_COMMAND_SEQUENCE_ERROR;
+	req->rsp->nvme_cpl.status.sct = sct;
+	req->rsp->nvme_cpl.status.sc = sc;
 	TAILQ_INSERT_TAIL(&qpair->outstanding, req, link);
 	_nvmf_request_complete(req);
 

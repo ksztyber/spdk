@@ -244,6 +244,10 @@ DEFINE_STUB(spdk_key_get_name, const char *, (struct spdk_key *k), NULL);
 DEFINE_STUB(spdk_key_get_key, int, (struct spdk_key *k, void *buf, int len), 1);
 
 DEFINE_STUB(nvmf_ns_is_ptpl_capable, bool, (const struct spdk_nvmf_ns *ns), false);
+DEFINE_STUB(nvmf_subsystem_host_auth_required, bool, (struct spdk_nvmf_subsystem *s, const char *n),
+	    false);
+DEFINE_STUB(nvmf_qpair_auth_init, int, (struct spdk_nvmf_qpair *q), 0);
+DEFINE_STUB_V(nvmf_auth_request_exec, (struct spdk_nvmf_request *r));
 
 struct spdk_io_channel *
 spdk_accel_get_io_channel(void)

@@ -115,6 +115,8 @@ DEFINE_STUB(spdk_nvme_transport_id_compare, int, (const struct spdk_nvme_transpo
 DEFINE_STUB_V(nvmf_update_discovery_log, (struct spdk_nvmf_tgt *tgt, const char *hostnqn));
 DEFINE_STUB(nvmf_nqn_is_valid, bool, (const char *nqn), true);
 DEFINE_STUB(nvmf_nqn_is_discovery, bool, (const char *nqn), true);
+DEFINE_STUB(nvmf_qpair_auth_init, int, (struct spdk_nvmf_qpair *q), 0);
+DEFINE_STUB_V(nvmf_qpair_auth_destroy, (struct spdk_nvmf_qpair *q));
 
 struct spdk_io_channel {
 	struct spdk_thread		*thread;
