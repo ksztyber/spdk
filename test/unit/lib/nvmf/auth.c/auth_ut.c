@@ -12,6 +12,13 @@
 DEFINE_STUB(spdk_nvme_auth_get_digest_name, const char *, (int d), NULL);
 DEFINE_STUB(spdk_nvme_auth_get_dhgroup_name, const char *, (int d), NULL);
 DEFINE_STUB(spdk_nvme_auth_get_digest_length, uint8_t, (int), 0);
+DEFINE_STUB_V(spdk_keyring_put_key, (struct spdk_key *k));
+DEFINE_STUB(spdk_nvme_auth_calculate, int,
+	    (struct spdk_key *k, enum spdk_nvmf_auth_hash h, const char *t, uint32_t sq,
+	     uint16_t tid, bool scc, const char *n1, const char *n2, const void *dk, size_t dl,
+	     const void *cv, void *rv), 0);
+DEFINE_STUB(nvmf_subsystem_get_chap_key, struct spdk_key *,
+	    (struct spdk_nvmf_subsystem *s, const char *h), NULL);
 DECLARE_WRAPPER(RAND_bytes, int, (unsigned char *buf, int num));
 
 static uint8_t g_rand_val;

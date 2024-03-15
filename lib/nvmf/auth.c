@@ -8,6 +8,7 @@
 #include "spdk/string.h"
 #include "spdk/thread.h"
 #include "spdk/util.h"
+#include "spdk_internal/nvme.h"
 
 #include <openssl/rand.h>
 
@@ -22,6 +23,8 @@
 #define AUTH_DEBUGLOG(q, fmt, ...) \
 	SPDK_DEBUGLOG(nvmf_auth, "[%s:%s:%u] " fmt, \
 		      (q)->ctrlr->subsys->subnqn, (q)->ctrlr->hostnqn, (q)->qid, ## __VA_ARGS__)
+#define AUTH_LOGDUMP(msg, buf, len) \
+	SPDK_LOGDUMP(nvmf_auth, msg, buf, len)
 
 enum nvmf_qpair_auth_state {
 	NVMF_QPAIR_AUTH_NEGOTIATE,
@@ -248,6 +251,81 @@ nvmf_auth_negotiate_exec(struct spdk_nvmf_request *req, struct spdk_nvmf_auth_ne
 	return 0;
 }
 
+static int
+nvmf_auth_reply_exec(struct spdk_nvmf_request *req, struct spdk_nvmf_auth_reply *msg)
+{
+	struct spdk_nvmf_qpair *qpair = req->qpair;
+	struct spdk_nvmf_ctrlr *ctrlr = qpair->ctrlr;
+	struct spdk_nvmf_qpair_auth *auth = qpair->auth;
+	uint8_t response[NVMF_AUTH_DIGEST_MAX_SIZE];
+	struct spdk_key *key;
+	uint8_t hl;
+	int rc;
+
+	if (req->length < sizeof(*msg)) {
+		AUTH_ERRLOG(qpair, "invalid message length=%"PRIu32"\n", req->length);
+		return SPDK_NVMF_AUTH_INCORRECT_PAYLOAD;
+	}
+	if (auth->state != NVMF_QPAIR_AUTH_CHALLENGE) {
+		AUTH_ERRLOG(qpair, "invalid state=%s\n", nvmf_auth_get_state_name(auth->state));
+		return SPDK_NVMF_AUTH_INCORRECT_PROTOCOL_MESSAGE;
+	}
+
+	hl = spdk_nvme_auth_get_digest_length(auth->digest);
+	if (hl == 0 || msg->hl != hl) {
+		AUTH_ERRLOG(qpair, "hash length mismatch: %u != %u\n", msg->hl, hl);
+		return SPDK_NVMF_AUTH_INCORRECT_PAYLOAD;
+	}
+	if (req->length < sizeof(*msg) + hl) {
+		AUTH_ERRLOG(qpair, "invalid message length=%"PRIu32"\n", req->length);
+		return SPDK_NVMF_AUTH_INCORRECT_PROTOCOL_MESSAGE;
+	}
+	if (msg->t_id != auth->tid) {
+		AUTH_ERRLOG(qpair, "transaction id mismatch: %u != %u\n", msg->t_id, auth->tid);
+		return SPDK_NVMF_AUTH_INCORRECT_PAYLOAD;
+	}
+	if (msg->cvalid) {
+		AUTH_ERRLOG(qpair, "bidirection authentication isn't supported yet\n");
+		return SPDK_NVMF_AUTH_INCORRECT_PAYLOAD;
+	}
+	if (msg->dhvlen != 0) {
+		AUTH_ERRLOG(qpair, "dhgroup length mismatch: %u != %u\n", msg->dhvlen, 0);
+		return SPDK_NVMF_AUTH_INCORRECT_PAYLOAD;
+	}
+	if (msg->seqnum != 0) {
+		AUTH_ERRLOG(qpair, "unexpected seqnum=%u\n", msg->seqnum);
+		return SPDK_NVMF_AUTH_INCORRECT_PAYLOAD;
+	}
+
+	key = nvmf_subsystem_get_chap_key(ctrlr->subsys, ctrlr->hostnqn);
+	if (key == NULL) {
+		AUTH_ERRLOG(qpair, "couldn't get DH-HMAC-CHAP key\n");
+		return SPDK_NVMF_AUTH_FAILED;
+	}
+
+	rc = spdk_nvme_auth_calculate(key, (enum spdk_nvmf_auth_hash)auth->digest,
+				      "HostHost", auth->seqnum, auth->tid, false,
+				      ctrlr->hostnqn, ctrlr->subsys->subnqn, NULL, 0,
+				      auth->challenge, response);
+	if (rc != 0) {
+		AUTH_ERRLOG(qpair, "failed to calculate challenge response: %s\n",
+			    spdk_strerror(-rc));
+		rc = SPDK_NVMF_AUTH_FAILED;
+		goto out;
+	}
+
+	if (memcmp(msg->rval, response, hl) != 0) {
+		AUTH_ERRLOG(qpair, "challenge response mismatch\n");
+		AUTH_LOGDUMP("response:", msg->rval, hl);
+		AUTH_LOGDUMP("expected:", response, hl);
+		rc = SPDK_NVMF_AUTH_FAILED;
+		goto out;
+	}
+out:
+	spdk_keyring_put_key(key);
+	return rc;
+}
+
 static void
 nvmf_auth_send_exec(struct spdk_nvmf_request *req)
 {
@@ -289,7 +367,18 @@ nvmf_auth_send_exec(struct spdk_nvmf_request *req)
 		}
 		break;
 	case SPDK_NVMF_AUTH_TYPE_DH_HMAC_CHAP:
+		switch (header->auth_id) {
+		case SPDK_NVMF_AUTH_ID_REPLY:
+			rc = nvmf_auth_reply_exec(req, (void *)header);
+			break;
+		default:
+			AUTH_ERRLOG(qpair, "unexpected auth_id=%u\n", header->auth_id);
+			rc = SPDK_NVMF_AUTH_INCORRECT_PROTOCOL_MESSAGE;
+			break;
+		}
+		break;
 	default:
+		AUTH_ERRLOG(qpair, "unexpected auth_type=%u\n", header->auth_type);
 		rc = SPDK_NVMF_AUTH_INCORRECT_PROTOCOL_MESSAGE;
 		break;
 	}
