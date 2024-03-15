@@ -11,8 +11,14 @@
 
 DEFINE_STUB(spdk_nvme_auth_get_digest_name, const char *, (int d), NULL);
 DEFINE_STUB(spdk_nvme_auth_get_dhgroup_name, const char *, (int d), NULL);
-DEFINE_STUB(spdk_nvmf_qpair_disconnect, int,
-	    (struct spdk_nvmf_qpair *q, nvmf_qpair_disconnect_cb cb, void *c), 0);
+
+int
+spdk_nvmf_qpair_disconnect(struct spdk_nvmf_qpair *qpair,
+			   nvmf_qpair_disconnect_cb cb_fn, void *cb_arg)
+{
+	qpair->state = SPDK_NVMF_QPAIR_ERROR;
+	return 0;
+}
 
 static bool g_req_completed;
 
@@ -405,6 +411,90 @@ test_auth_send_recv_error(void)
 	nvmf_qpair_auth_destroy(&qpair);
 }
 
+static void
+test_auth_recv_failure1(void)
+{
+	union nvmf_c2h_msg rsp = {};
+	struct spdk_nvmf_subsystem subsys = {};
+	struct spdk_nvmf_ctrlr ctrlr = { .subsys = &subsys };
+	struct spdk_nvmf_qpair qpair = { .ctrlr = &ctrlr };
+	struct spdk_nvmf_request req = { .qpair = &qpair, .rsp = &rsp };
+	struct spdk_nvmf_fabric_auth_recv_cmd cmd = {};
+	struct spdk_nvme_cpl *cpl = &rsp.nvme_cpl;
+	struct spdk_nvmf_qpair_auth *auth;
+	struct spdk_nvmf_auth_failure *msg;
+	uint8_t msgbuf[sizeof(*msg)];
+	int rc;
+
+	msg = (void *)msgbuf;
+	rc = nvmf_qpair_auth_init(&qpair);
+	SPDK_CU_ASSERT_FATAL(rc == 0);
+	auth = qpair.auth;
+	qpair.state = SPDK_NVMF_QPAIR_AUTHENTICATING;
+	req.length = sizeof(msgbuf);
+	req.iovcnt = 1;
+	req.iov[0].iov_base = msgbuf;
+	req.iov[0].iov_len = sizeof(msgbuf);
+	req.cmd = (union nvmf_h2c_msg *)&cmd;
+	cmd.secp = SPDK_NVMF_AUTH_SECP_NVME;
+	cmd.spsp0 = 1;
+	cmd.spsp1 = 1;
+	cmd.al = req.length = sizeof(*msg);
+
+	/* Check failure1 message fields */
+	g_req_completed = false;
+	auth->state = NVMF_QPAIR_AUTH_FAILURE1;
+	auth->fail_reason = SPDK_NVMF_AUTH_FAILED;
+	auth->tid = 8;
+
+	nvmf_auth_recv_exec(&req);
+	CU_ASSERT(g_req_completed);
+	CU_ASSERT_EQUAL(cpl->status.sct, 0);
+	CU_ASSERT_EQUAL(cpl->status.sc, 0);
+	CU_ASSERT_EQUAL(auth->state, NVMF_QPAIR_AUTH_FAILURE1);
+	CU_ASSERT_EQUAL(qpair.state, SPDK_NVMF_QPAIR_ERROR);
+	CU_ASSERT_EQUAL(msg->auth_type, SPDK_NVMF_AUTH_TYPE_COMMON_MESSAGE);
+	CU_ASSERT_EQUAL(msg->auth_id, SPDK_NVMF_AUTH_ID_FAILURE1);
+	CU_ASSERT_EQUAL(msg->t_id, 8);
+	CU_ASSERT_EQUAL(msg->rc, SPDK_NVMF_AUTH_FAILURE);
+	CU_ASSERT_EQUAL(msg->rce, SPDK_NVMF_AUTH_FAILED);
+	qpair.state = SPDK_NVMF_QPAIR_AUTHENTICATING;
+
+	/* Do a receive while expecting an auth send command */
+	g_req_completed = false;
+	auth->state = NVMF_QPAIR_AUTH_NEGOTIATE;
+	auth->fail_reason = 0;
+
+	nvmf_auth_recv_exec(&req);
+	CU_ASSERT(g_req_completed);
+	CU_ASSERT_EQUAL(cpl->status.sct, 0);
+	CU_ASSERT_EQUAL(cpl->status.sc, 0);
+	CU_ASSERT_EQUAL(auth->state, NVMF_QPAIR_AUTH_FAILURE1);
+	CU_ASSERT_EQUAL(qpair.state, SPDK_NVMF_QPAIR_ERROR);
+	CU_ASSERT_EQUAL(msg->auth_type, SPDK_NVMF_AUTH_TYPE_COMMON_MESSAGE);
+	CU_ASSERT_EQUAL(msg->auth_id, SPDK_NVMF_AUTH_ID_FAILURE1);
+	CU_ASSERT_EQUAL(msg->t_id, 8);
+	CU_ASSERT_EQUAL(msg->rc, SPDK_NVMF_AUTH_FAILURE);
+	CU_ASSERT_EQUAL(msg->rce, SPDK_NVMF_AUTH_INCORRECT_PROTOCOL_MESSAGE);
+	qpair.state = SPDK_NVMF_QPAIR_AUTHENTICATING;
+
+	/* Do a receive but specify a buffer that's too small */
+	g_req_completed = false;
+	auth->state = NVMF_QPAIR_AUTH_FAILURE1;
+	auth->fail_reason = SPDK_NVMF_AUTH_FAILED;
+	req.iov[0].iov_len = cmd.al = req.length = sizeof(*msg) - 1;
+
+	nvmf_auth_recv_exec(&req);
+	CU_ASSERT(g_req_completed);
+	CU_ASSERT_EQUAL(cpl->status.sct, SPDK_NVME_SCT_GENERIC);
+	CU_ASSERT_EQUAL(cpl->status.sc, SPDK_NVME_SC_INVALID_FIELD);
+	CU_ASSERT_EQUAL(cpl->status.dnr, 1);
+	CU_ASSERT_EQUAL(qpair.state, SPDK_NVMF_QPAIR_ERROR);
+	req.iov[0].iov_len = cmd.al = req.length = sizeof(*msg);
+
+	nvmf_qpair_auth_destroy(&qpair);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -415,6 +505,7 @@ main(int argc, char **argv)
 	suite = CU_add_suite("nvmf_auth", NULL, NULL);
 	CU_ADD_TEST(suite, test_auth_send_recv_error);
 	CU_ADD_TEST(suite, test_auth_negotiate);
+	CU_ADD_TEST(suite, test_auth_recv_failure1);
 
 	allocate_threads(1);
 	set_thread(0);
