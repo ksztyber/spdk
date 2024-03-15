@@ -2,10 +2,12 @@
  * Copyright (c) 2024 Intel Corporation.  All rights reserved.
  */
 
+#include "spdk/nvme.h"
 #include "spdk/log.h"
 #include "spdk/stdinc.h"
 #include "spdk/string.h"
 #include "spdk/thread.h"
+#include "spdk/util.h"
 
 #include "nvmf_internal.h"
 
@@ -20,12 +22,23 @@
 
 enum nvmf_qpair_auth_state {
 	NVMF_QPAIR_AUTH_NEGOTIATE,
+	NVMF_QPAIR_AUTH_FAILURE1,
 	NVMF_QPAIR_AUTH_ERROR,
 };
 
 struct spdk_nvmf_qpair_auth {
 	enum nvmf_qpair_auth_state	state;
 	struct spdk_poller		*poller;
+	int				fail_reason;
+	uint16_t			tid;
+	int				digest;
+};
+
+struct nvmf_auth_common_header {
+	uint8_t		auth_type;
+	uint8_t		auth_id;
+	uint8_t		reserved0[2];
+	uint16_t	t_id;
 };
 
 static void
@@ -40,11 +53,12 @@ nvmf_auth_request_complete(struct spdk_nvmf_request *req, int sct, int sc, int d
 	spdk_nvmf_request_complete(req);
 }
 
- __attribute__((unused)) static const char *
+static const char *
 nvmf_auth_get_state_name(enum nvmf_qpair_auth_state state)
 {
 	static const char *state_names[] = {
 		[NVMF_QPAIR_AUTH_NEGOTIATE] = "negotiate",
+		[NVMF_QPAIR_AUTH_FAILURE1] = "failure1",
 		[NVMF_QPAIR_AUTH_ERROR] = "error",
 	};
 
@@ -58,6 +72,15 @@ nvmf_auth_set_state(struct spdk_nvmf_qpair *qpair, enum nvmf_qpair_auth_state st
 
 	AUTH_DEBUGLOG(qpair, "auth state: %s\n", nvmf_auth_get_state_name(state));
 	auth->state = state;
+}
+
+static void
+nvmf_auth_set_failure1(struct spdk_nvmf_qpair *qpair, int reason)
+{
+	struct spdk_nvmf_qpair_auth *auth = qpair->auth;
+
+	nvmf_auth_set_state(qpair, NVMF_QPAIR_AUTH_FAILURE1);
+	auth->fail_reason = reason;
 }
 
 static int
@@ -117,10 +140,112 @@ nvmf_auth_check_command(struct spdk_nvmf_request *req, uint8_t secp,
 	return 0;
 }
 
+static void *
+nvmf_auth_get_message(struct spdk_nvmf_request *req, size_t size)
+{
+	if (req->length > 0 && req->iovcnt == 1 && req->iov[0].iov_len >= size) {
+		return req->iov[0].iov_base;
+	}
+
+	return NULL;
+}
+
+static int
+nvmf_auth_negotiate_exec(struct spdk_nvmf_request *req, struct spdk_nvmf_auth_negotiate *msg)
+{
+	struct spdk_nvmf_qpair *qpair = req->qpair;
+	struct spdk_nvmf_qpair_auth *auth = qpair->auth;
+	struct spdk_nvmf_auth_descriptor *desc = NULL;
+	enum spdk_nvmf_auth_hash digests[] = {
+		SPDK_NVMF_AUTH_HASH_SHA512,
+		SPDK_NVMF_AUTH_HASH_SHA384,
+		SPDK_NVMF_AUTH_HASH_SHA256
+	};
+	enum spdk_nvmf_auth_dhgroup dhgroups[] = {
+		SPDK_NVMF_AUTH_DHGROUP_NULL,
+	};
+	int digest = -1, dhgroup = -1;
+	size_t i, j;
+
+	if (auth->state != NVMF_QPAIR_AUTH_NEGOTIATE) {
+		AUTH_ERRLOG(qpair, "invalid state: %s\n", nvmf_auth_get_state_name(auth->state));
+		return SPDK_NVMF_AUTH_INCORRECT_PROTOCOL_MESSAGE;
+	}
+
+	auth->tid = msg->t_id;
+	if (req->length < sizeof(*msg) || req->length != sizeof(*msg) + msg->napd * sizeof(*desc)) {
+		AUTH_ERRLOG(qpair, "invalid message length: %"PRIu32"\n", req->length);
+		return SPDK_NVMF_AUTH_INCORRECT_PAYLOAD;
+	}
+
+	if (msg->sc_c != SPDK_NVMF_AUTH_SCC_DISABLED) {
+		AUTH_ERRLOG(qpair, "scc mismatch\n");
+		return SPDK_NVMF_AUTH_SCC_MISMATCH;
+	}
+
+	for (i = 0; i < msg->napd; ++i) {
+		if (msg->descriptors[i].auth_id == SPDK_NVMF_AUTH_TYPE_DH_HMAC_CHAP) {
+			desc = &msg->descriptors[i];
+			break;
+		}
+	}
+	if (desc == NULL) {
+		AUTH_ERRLOG(qpair, "no usable protocol found\n");
+		return SPDK_NVMF_AUTH_PROTOCOL_UNUSABLE;
+	}
+	if (desc->halen > SPDK_COUNTOF(desc->hash_id_list) ||
+	    desc->dhlen > SPDK_COUNTOF(desc->dhg_id_list)) {
+		AUTH_ERRLOG(qpair, "invalid halen=%u, dhlen=%u\n", desc->halen, desc->dhlen);
+		return SPDK_NVMF_AUTH_INCORRECT_PAYLOAD;
+	}
+
+	for (i = 0; i < SPDK_COUNTOF(digests); ++i) {
+		for (j = 0; j < desc->halen; ++j) {
+			if (digests[i] == desc->hash_id_list[j]) {
+				AUTH_DEBUGLOG(qpair, "selected digest: %s\n",
+					      spdk_nvme_auth_get_digest_name(digests[i]));
+				digest = digests[i];
+				break;
+			}
+		}
+		if (digest > 0) {
+			break;
+		}
+	}
+	if (digest < 0) {
+		AUTH_ERRLOG(qpair, "no usable digests found\n");
+		return SPDK_NVMF_AUTH_HASH_UNUSABLE;
+	}
+
+	for (i = 0; i < SPDK_COUNTOF(dhgroups); ++i) {
+		for (j = 0; j < desc->dhlen; ++j) {
+			if (dhgroups[i] == desc->dhg_id_list[j]) {
+				AUTH_DEBUGLOG(qpair, "selected dhgroup: %s\n",
+					      spdk_nvme_auth_get_dhgroup_name(dhgroups[i]));
+				dhgroup = dhgroups[i];
+				break;
+			}
+		}
+		if (dhgroup > 0) {
+			break;
+		}
+	}
+	if (dhgroup < 0) {
+		AUTH_ERRLOG(qpair, "no usable dhgroups found\n");
+		return SPDK_NVMF_AUTH_DHGROUP_UNUSABLE;
+	}
+
+	auth->digest = digest;
+
+	return 0;
+}
+
 static void
 nvmf_auth_send_exec(struct spdk_nvmf_request *req)
 {
+	struct spdk_nvmf_qpair *qpair = req->qpair;
 	struct spdk_nvmf_fabric_auth_send_cmd *cmd = &req->cmd->auth_send_cmd;
+	struct nvmf_auth_common_header *header;
 	int rc;
 
 	rc = nvmf_auth_check_command(req, cmd->secp, cmd->spsp0, cmd->spsp1, cmd->tl);
@@ -130,8 +255,41 @@ nvmf_auth_send_exec(struct spdk_nvmf_request *req)
 		return;
 	}
 
-	nvmf_auth_request_complete(req, SPDK_NVME_SCT_GENERIC,
-				   SPDK_NVME_SC_INVALID_OPCODE, 1);
+	if (nvmf_auth_rearm_poller(qpair)) {
+		nvmf_auth_request_complete(req, SPDK_NVME_SCT_GENERIC,
+					   SPDK_NVME_SC_INTERNAL_DEVICE_ERROR, 0);
+		spdk_nvmf_qpair_disconnect(qpair, NULL, NULL);
+		return;
+	}
+
+	header = nvmf_auth_get_message(req, sizeof(*header));
+	if (header == NULL) {
+		rc = SPDK_NVMF_AUTH_INCORRECT_PAYLOAD;
+		goto out;
+	}
+
+	switch (header->auth_type) {
+	case SPDK_NVMF_AUTH_TYPE_COMMON_MESSAGE:
+		switch (header->auth_id) {
+		case SPDK_NVMF_AUTH_ID_NEGOTIATE:
+			rc = nvmf_auth_negotiate_exec(req, (void *)header);
+			break;
+		default:
+			AUTH_ERRLOG(qpair, "unexpected auth_id=%u\n", header->auth_id);
+			rc = SPDK_NVMF_AUTH_INCORRECT_PROTOCOL_MESSAGE;
+			break;
+		}
+		break;
+	case SPDK_NVMF_AUTH_TYPE_DH_HMAC_CHAP:
+	default:
+		rc = SPDK_NVMF_AUTH_INCORRECT_PROTOCOL_MESSAGE;
+		break;
+	}
+out:
+	if (rc != 0) {
+		nvmf_auth_set_failure1(qpair, rc);
+	}
+	nvmf_auth_request_complete(req, 0, 0, 0);
 }
 
 static void
@@ -184,6 +342,7 @@ nvmf_qpair_auth_init(struct spdk_nvmf_qpair *qpair)
 		return -ENOMEM;
 	}
 
+	auth->digest = -1;
 	qpair->auth = auth;
 	nvmf_auth_set_state(qpair, NVMF_QPAIR_AUTH_NEGOTIATE);
 
