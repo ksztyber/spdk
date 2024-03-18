@@ -29,6 +29,7 @@
 enum nvmf_qpair_auth_state {
 	NVMF_QPAIR_AUTH_NEGOTIATE,
 	NVMF_QPAIR_AUTH_CHALLENGE,
+	NVMF_QPAIR_AUTH_SUCCESS1,
 	NVMF_QPAIR_AUTH_FAILURE1,
 	NVMF_QPAIR_AUTH_ERROR,
 };
@@ -68,6 +69,7 @@ nvmf_auth_get_state_name(enum nvmf_qpair_auth_state state)
 	static const char *state_names[] = {
 		[NVMF_QPAIR_AUTH_NEGOTIATE] = "negotiate",
 		[NVMF_QPAIR_AUTH_CHALLENGE] = "challenge",
+		[NVMF_QPAIR_AUTH_SUCCESS1] = "success1",
 		[NVMF_QPAIR_AUTH_FAILURE1] = "failure1",
 		[NVMF_QPAIR_AUTH_ERROR] = "error",
 	};
@@ -321,6 +323,8 @@ nvmf_auth_reply_exec(struct spdk_nvmf_request *req, struct spdk_nvmf_auth_reply 
 		rc = SPDK_NVMF_AUTH_FAILED;
 		goto out;
 	}
+
+	nvmf_auth_set_state(qpair, NVMF_QPAIR_AUTH_SUCCESS1);
 out:
 	spdk_keyring_put_key(key);
 	return rc;
@@ -483,6 +487,34 @@ nvmf_auth_recv_challenge(struct spdk_nvmf_request *req)
 	return 0;
 }
 
+static int
+nvmf_auth_recv_success1(struct spdk_nvmf_request *req)
+{
+	struct spdk_nvmf_qpair *qpair = req->qpair;
+	struct spdk_nvmf_qpair_auth *auth = qpair->auth;
+	struct spdk_nvmf_auth_success1 *success;
+
+	success = nvmf_auth_get_message(req, sizeof(*success));
+	if (success == NULL) {
+		AUTH_ERRLOG(qpair, "invalid message length: %"PRIu32"\n", req->length);
+		return SPDK_NVMF_AUTH_INCORRECT_PAYLOAD;
+	}
+
+	memset(success, 0, sizeof(*success));
+	success->auth_type = SPDK_NVMF_AUTH_TYPE_DH_HMAC_CHAP;
+	success->auth_id = SPDK_NVMF_AUTH_ID_SUCCESS1;
+	success->t_id = auth->tid;
+	success->hl = 0;
+	success->rvalid = 0;
+
+	AUTH_DEBUGLOG(qpair, "host authentication successful\n");
+	nvmf_auth_request_complete(req, 0, 0, 0);
+	nvmf_qpair_set_state(qpair, SPDK_NVMF_QPAIR_ENABLED);
+	nvmf_qpair_auth_destroy(qpair);
+
+	return 0;
+}
+
 static void
 nvmf_auth_recv_exec(struct spdk_nvmf_request *req)
 {
@@ -501,6 +533,13 @@ nvmf_auth_recv_exec(struct spdk_nvmf_request *req)
 	switch (auth->state) {
 	case NVMF_QPAIR_AUTH_CHALLENGE:
 		rc = nvmf_auth_recv_challenge(req);
+		if (rc != 0) {
+			nvmf_auth_set_failure1(qpair, rc);
+			nvmf_auth_recv_failure1(req);
+		}
+		break;
+	case NVMF_QPAIR_AUTH_SUCCESS1:
+		rc = nvmf_auth_recv_success1(req);
 		if (rc != 0) {
 			nvmf_auth_set_failure1(qpair, rc);
 			nvmf_auth_recv_failure1(req);

@@ -19,6 +19,7 @@ DEFINE_STUB(spdk_nvme_auth_calculate, int,
 	     const void *cv, void *rv), 0);
 DEFINE_STUB(nvmf_subsystem_get_chap_key, struct spdk_key *,
 	    (struct spdk_nvmf_subsystem *s, const char *h), NULL);
+DEFINE_STUB_V(nvmf_qpair_set_state, (struct spdk_nvmf_qpair *q, enum spdk_nvmf_qpair_state s));
 DECLARE_WRAPPER(RAND_bytes, int, (unsigned char *buf, int num));
 
 static uint8_t g_rand_val;
