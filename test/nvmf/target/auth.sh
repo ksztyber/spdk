@@ -228,6 +228,7 @@ hostrpc bdev_nvme_detach_controller nvme0
 NOT bdev_connect -b "nvme0" --dhchap-key "key1"
 bdev_connect -b "nvme0" --dhchap-key "key2" --dhchap-ctrlr-key "key3"
 [[ $(hostrpc bdev_nvme_get_controllers | jq -r '.[].name') == "nvme0" ]]
+hostrpc bdev_nvme_detach_controller nvme0
 # Change the keys on the target once again, but this time force reauthentication on the already
 # established connections
 rpc_cmd nvmf_subsystem_set_keys "$subnqn" "$hostnqn" --dhchap-key "key1" --dhchap-ctrlr-key "key3"
@@ -240,6 +241,29 @@ waitforblk "${nctrlr}n1"
 # Try to reauthenticate with incorrect keys
 nvme_set_keys "$nctrlr" "$(< ${keys[0]})"
 waitforblk_disconnect "${nctrlr}n1"
+
+# Reauthenticate using bdev_nvme
+rpc_cmd nvmf_subsystem_set_keys "$subnqn" "$hostnqn" --dhchap-key "key0" --dhchap-ctrlr-key "key1"
+bdev_connect -b "nvme0" --dhchap-key "key0" --dhchap-ctrlr-key "key1" --ctrlr-loss-timeout-sec 1 \
+	--reconnect-delay-sec 1
+rpc_cmd nvmf_subsystem_set_keys "$subnqn" "$hostnqn" --dhchap-key "key2" --dhchap-ctrlr-key "key3"
+hostrpc bdev_nvme_set_keys "nvme0" --dhchap-key "key2" --dhchap-ctrlr-key "key3"
+[[ $(hostrpc bdev_nvme_get_controllers | jq -r '.[].name') == "nvme0" ]]
+# Use wrong keys and verify that the ctrlr will get disconnected after ctrlr-loss-timeout-sec
+NOT hostrpc bdev_nvme_set_keys "nvme0" --dhchap-key "key1" --dhchap-ctrlr-key "key3"
+while (($(hostrpc bdev_nvme_get_controllers | jq 'length') != 0)); do
+	sleep 1s
+done
+
+# Do the same, but this time try with a valid host key, but bad ctrlr key
+rpc_cmd nvmf_subsystem_set_keys "$subnqn" "$hostnqn" --dhchap-key "key0" --dhchap-ctrlr-key "key1"
+bdev_connect -b "nvme0" --dhchap-key "key0" --dhchap-ctrlr-key "key1" --ctrlr-loss-timeout-sec 1 \
+	--reconnect-delay-sec 1
+rpc_cmd nvmf_subsystem_set_keys "$subnqn" "$hostnqn" --dhchap-key "key2" --dhchap-ctrlr-key "key3"
+NOT hostrpc bdev_nvme_set_keys "nvme0" --dhchap-key "key2" --dhchap-ctrlr-key "key0"
+while (($(hostrpc bdev_nvme_get_controllers | jq 'length') != 0)); do
+	sleep 1s
+done
 
 trap - SIGINT SIGTERM EXIT
 cleanup
