@@ -2004,6 +2004,11 @@ void spdk_nvme_qpair_set_abort_dnr(struct spdk_nvme_qpair *qpair, bool dnr);
  */
 bool spdk_nvme_qpair_is_connected(struct spdk_nvme_qpair *qpair);
 
+typedef void (*spdk_nvme_authenticate_cb)(void *ctx, int status);
+
+int spdk_nvme_qpair_authenticate(struct spdk_nvme_qpair *qpair,
+				 spdk_nvme_authenticate_cb cb_fn, void *cb_ctx);
+
 /**
  * Send the given admin command to the NVMe controller.
  *
@@ -4355,6 +4360,8 @@ struct spdk_nvme_transport_ops {
 	int (*qpair_reset)(struct spdk_nvme_qpair *qpair);
 
 	int (*qpair_submit_request)(struct spdk_nvme_qpair *qpair, struct nvme_request *req);
+
+	int (*qpair_authenticate)(struct spdk_nvme_qpair *qpair);
 
 	int32_t (*qpair_process_completions)(struct spdk_nvme_qpair *qpair, uint32_t max_completions);
 
