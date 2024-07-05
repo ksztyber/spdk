@@ -48,7 +48,7 @@ waitforlisten $bdevperf_pid $bdevperf_rpc_sock
 
 # Create a controller from the first IP/Port combination.
 $rpc_py -s $bdevperf_rpc_sock bdev_nvme_attach_controller -b NVMe0 -t $TEST_TRANSPORT -a $NVMF_FIRST_TARGET_IP \
-	-s $NVMF_PORT -f ipv4 -n nqn.2016-06.io.spdk:cnode1 -i $NVMF_FIRST_TARGET_IP -c $NVMF_HOST_FIRST_PORT
+	-s $NVMF_PORT -f ipv4 -n nqn.2016-06.io.spdk:cnode1 -i $NVMF_INITIATOR_IP
 
 # wait for the first controller to show up.
 while ! $rpc_py -s $bdevperf_rpc_sock bdev_nvme_get_controllers | grep -c NVMe; do
@@ -58,21 +58,21 @@ done
 
 # try to attach with same controller name but different hostnqn. Should fail.
 NOT $rpc_py -s $bdevperf_rpc_sock bdev_nvme_attach_controller -b NVMe0 -t $TEST_TRANSPORT -a $NVMF_FIRST_TARGET_IP \
-	-s $NVMF_PORT -f ipv4 -n nqn.2016-06.io.spdk:cnode1 -i $NVMF_FIRST_TARGET_IP -c $NVMF_HOST_FIRST_PORT \
+	-s $NVMF_PORT -f ipv4 -n nqn.2016-06.io.spdk:cnode1 -i $NVMF_INITIATOR_IP \
 	-q nqn.2021-09-7.io.spdk:00001
 
 # try to attach with same controller name but different subnqn. Should fail.
 NOT $rpc_py -s $bdevperf_rpc_sock bdev_nvme_attach_controller -b NVMe0 -t $TEST_TRANSPORT -a $NVMF_FIRST_TARGET_IP \
-	-s $NVMF_PORT -f ipv4 -n nqn.2016-06.io.spdk:cnode2 -i $NVMF_FIRST_TARGET_IP -c $NVMF_HOST_FIRST_PORT
+	-s $NVMF_PORT -f ipv4 -n nqn.2016-06.io.spdk:cnode2 -i $NVMF_INITIATOR_IP
 
 # try to attach with the same controller name and multipathing disabled. Should fail
 NOT $rpc_py -s $bdevperf_rpc_sock bdev_nvme_attach_controller -b NVMe0 -t $TEST_TRANSPORT -a $NVMF_FIRST_TARGET_IP \
-	-s $NVMF_PORT -f ipv4 -n nqn.2016-06.io.spdk:cnode1 -i $NVMF_FIRST_TARGET_IP -c $NVMF_HOST_FIRST_PORT \
+	-s $NVMF_PORT -f ipv4 -n nqn.2016-06.io.spdk:cnode1 -i $NVMF_INITIATOR_IP \
 	-x disable
 
 # Attempt to add an identical path as a failover path. Should fail.
 NOT $rpc_py -s $bdevperf_rpc_sock bdev_nvme_attach_controller -b NVMe0 -t $TEST_TRANSPORT -a $NVMF_FIRST_TARGET_IP \
-	-s $NVMF_PORT -f ipv4 -n nqn.2016-06.io.spdk:cnode1 -i $NVMF_FIRST_TARGET_IP -c $NVMF_HOST_FIRST_PORT \
+	-s $NVMF_PORT -f ipv4 -n nqn.2016-06.io.spdk:cnode1 -i $NVMF_INITIATOR_IP \
 	-x failover
 
 # Add a second path without specifying the host information. Should pass.
@@ -85,7 +85,7 @@ $rpc_py -s $bdevperf_rpc_sock bdev_nvme_detach_controller NVMe0 -t $TEST_TRANSPO
 
 # Add a second controller by attaching to the same subsystem with a different controller name
 $rpc_py -s $bdevperf_rpc_sock bdev_nvme_attach_controller -b NVMe1 -t $TEST_TRANSPORT -a $NVMF_FIRST_TARGET_IP \
-	-s $NVMF_SECOND_PORT -f ipv4 -n nqn.2016-06.io.spdk:cnode1 -i $NVMF_FIRST_TARGET_IP -c $NVMF_HOST_FIRST_PORT
+	-s $NVMF_SECOND_PORT -f ipv4 -n nqn.2016-06.io.spdk:cnode1 -i $NVMF_INITIATOR_IP
 
 if [ "$($rpc_py -s $bdevperf_rpc_sock bdev_nvme_get_controllers | grep -c NVMe)" != "2" ]; then
 	echo "actual number of controllers is not equal to expected count."
