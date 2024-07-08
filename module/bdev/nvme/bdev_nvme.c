@@ -1906,17 +1906,15 @@ bdev_nvme_check_ctrlr_loss_timeout(struct nvme_ctrlr *nvme_ctrlr)
 {
 	int32_t elapsed;
 
-	if (nvme_ctrlr->opts.ctrlr_loss_timeout_sec == 0 ||
-	    nvme_ctrlr->opts.ctrlr_loss_timeout_sec == -1) {
+	if (nvme_ctrlr->opts.ctrlr_loss_timeout_sec == 0) {
+		return true;
+	}
+	if (nvme_ctrlr->opts.ctrlr_loss_timeout_sec == -1) {
 		return false;
 	}
 
 	elapsed = (spdk_get_ticks() - nvme_ctrlr->reset_start_tsc) / spdk_get_ticks_hz();
-	if (elapsed >= nvme_ctrlr->opts.ctrlr_loss_timeout_sec) {
-		return true;
-	} else {
-		return false;
-	}
+	return elapsed >= nvme_ctrlr->opts.ctrlr_loss_timeout_sec;
 }
 
 static bool
@@ -1982,7 +1980,7 @@ bdev_nvme_check_op_after_reset(struct nvme_ctrlr *nvme_ctrlr, bool success)
 		nvme_ctrlr->pending_failover = false;
 		nvme_ctrlr->reset_start_tsc = 0;
 		return OP_FAILOVER;
-	} else if (success || nvme_ctrlr->opts.reconnect_delay_sec == 0) {
+	} else if (success) {
 		nvme_ctrlr->reset_start_tsc = 0;
 		return OP_NONE;
 	} else if (bdev_nvme_check_ctrlr_loss_timeout(nvme_ctrlr)) {
