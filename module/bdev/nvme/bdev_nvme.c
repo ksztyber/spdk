@@ -2752,15 +2752,9 @@ static void
 _bdev_nvme_reset_io_complete(struct spdk_io_channel_iter *i, int status)
 {
 	struct nvme_bdev_io *bio = spdk_io_channel_iter_get_ctx(i);
-	enum spdk_bdev_io_status io_status;
 
-	if (bio->cpl.cdw0 == 0) {
-		io_status = SPDK_BDEV_IO_STATUS_SUCCESS;
-	} else {
-		io_status = SPDK_BDEV_IO_STATUS_FAILED;
-	}
-
-	__bdev_nvme_io_complete(spdk_bdev_io_from_ctx(bio), io_status, NULL);
+	assert(bio->cpl.cdw0 == 0);
+	__bdev_nvme_io_complete(spdk_bdev_io_from_ctx(bio), SPDK_BDEV_IO_STATUS_SUCCESS, NULL);
 }
 
 static void
@@ -2779,6 +2773,11 @@ bdev_nvme_reset_io_complete(struct nvme_bdev_io *bio)
 {
 	struct spdk_bdev_io *bdev_io = spdk_bdev_io_from_ctx(bio);
 	struct nvme_bdev *nbdev = (struct nvme_bdev *)bdev_io->bdev->ctxt;
+
+	if (bio->cpl.cdw0 != 0) {
+		__bdev_nvme_io_complete(bdev_io, SPDK_BDEV_IO_STATUS_FAILED, NULL);
+		return;
+	}
 
 	/* Abort all queued I/Os for retry. */
 	spdk_for_each_channel(nbdev,
