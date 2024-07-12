@@ -7546,6 +7546,9 @@ main(int argc, char **argv)
 	bdev_nvme_library_init();
 	init_accel();
 
+	/* Make sure spdk_get_ticks() doesn't return 0, as some tests rely on 0 being special */
+	spdk_delay_us(1);
+
 	num_failures = spdk_ut_run_tests(argc, argv, NULL);
 
 	set_thread(0);
