@@ -1,6 +1,6 @@
 # Storage Performance Development Kit
 
-[![License](https://img.shields.io/github/license/spdk/spdk?style=flat-square&color=blue&label=License)](https://github.com/spdk/spdk/blob/master/LICENSE)
+[![License](https://img.shields.io/github/license/ksztyber/spdk?style=flat-square&color=blue&label=License)](https://github.com/ksztyber/spdk/blob/master/LICENSES/BSD-3-Clause.txt)
 [![Build Status](https://travis-ci.org/spdk/spdk.svg?branch=master)](https://travis-ci.org/spdk/spdk)
 [![Go Doc](https://img.shields.io/badge/godoc-reference-blue.svg)](http://godoc.org/github.com/spdk/spdk/go/rpc)
 [![Go Report Card](https://goreportcard.com/badge/github.com/spdk/spdk/go/rpc)](https://goreportcard.com/report/github.com/spdk/spdk/go/rpc)
@@ -275,3 +275,32 @@ vfio.
 For additional details on how to get more involved in the community, including
 [contributing code](http://www.spdk.io/development) and participating in discussions and other activities, please
 refer to [spdk.io](http://www.spdk.io/community)
+
+<a id="license"></a>
+## License
+
+The SPDK repo contains multiple git submodules each with its own license info.
+
+Submodule license info:
+dpdk: see `dpdk/license`
+intel-ipsec-mb: see `intel-ipsec-mb/LICENSE`
+isa-l: see `isa-l/LICENSE`
+libvfio-user: see `libvfio-user/LICENSE`
+ocf: see `ocf/LICENSE`
+
+The rest of the SPDK repository uses the Open Source BSD-3-Clause license.  SPDK also uses SPDX
+Unique License Identifiers to eliminate the need to copy the license text into each individual file.
+
+Any new file contributions to SPDK shall adhere to the BSD-3-Clause license and use SPDX
+identifiers. Exceptions are subject to usual review and must be listed in this file.
+
+Exceptions:
+
+* `include/linux/*` header files are BSD-3-Clause but do not use SPDX identifier to keep them
+  identical to the same header files in the Linux kernel source tree.
+
+* `include/spdk/tree.h` and `include/spdk/queue_extras` are BSD-2-Clause, since there were primarily
+  imported from FreeBSD.  `tree.h` uses an SPDX identifier but also the license text to reduce
+  differences from the FreeBSD source tree.
+
+* `lib/util/base64_neon.c` is BSD-2-Clause.
